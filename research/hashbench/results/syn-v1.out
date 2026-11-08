@@ -1,0 +1,110 @@
+rep 0: fixed 320 calls -> 1.008x opt  dream 149 calls -> 1.362x opt
+rep 1: fixed 320 calls -> 1.244x opt  dream 209 calls -> 1.000x opt
+rep 2: fixed 320 calls -> 1.055x opt  dream 272 calls -> 1.017x opt
+rep 3: fixed 320 calls -> 1.028x opt  dream 240 calls -> 1.074x opt
+rep 4: fixed 320 calls -> 1.430x opt  dream 236 calls -> 1.470x opt
+rep 5: fixed 320 calls -> 1.028x opt  dream 320 calls -> 1.028x opt
+rep 6: fixed 320 calls -> 1.002x opt  dream 320 calls -> 1.392x opt
+rep 7: fixed 320 calls -> 1.002x opt  dream 225 calls -> 1.074x opt
+rep 8: fixed 320 calls -> 1.342x opt  dream 144 calls -> 1.362x opt
+rep 9: fixed 320 calls -> 1.064x opt  dream 158 calls -> 1.000x opt
+rep 10: fixed 320 calls -> 1.002x opt  dream 238 calls -> 1.274x opt
+rep 11: fixed 320 calls -> 1.008x opt  dream 320 calls -> 1.003x opt
+rep 12: fixed 320 calls -> 1.003x opt  dream 289 calls -> 1.054x opt
+rep 13: fixed 320 calls -> 1.470x opt  dream 252 calls -> 1.002x opt
+rep 14: fixed 320 calls -> 1.384x opt  dream 253 calls -> 1.066x opt
+rep 15: fixed 320 calls -> 1.002x opt  dream 200 calls -> 1.017x opt
+rep 16: fixed 320 calls -> 1.362x opt  dream 224 calls -> 1.002x opt
+rep 17: fixed 320 calls -> 1.106x opt  dream 288 calls -> 1.099x opt
+rep 18: fixed 320 calls -> 1.362x opt  dream 168 calls -> 1.021x opt
+rep 19: fixed 320 calls -> 1.105x opt  dream 320 calls -> 1.002x opt
+rep 20: fixed 320 calls -> 1.008x opt  dream 248 calls -> 1.008x opt
+rep 21: fixed 320 calls -> 1.002x opt  dream 320 calls -> 1.017x opt
+rep 22: fixed 320 calls -> 1.244x opt  dream 245 calls -> 1.244x opt
+rep 23: fixed 320 calls -> 1.362x opt  dream 136 calls -> 1.362x opt
+rep 24: fixed 320 calls -> 1.099x opt  dream 288 calls -> 1.055x opt
+rep 25: fixed 320 calls -> 1.274x opt  dream 189 calls -> 1.054x opt
+rep 26: fixed 320 calls -> 1.008x opt  dream 242 calls -> 1.055x opt
+rep 27: fixed 320 calls -> 1.342x opt  dream 320 calls -> 1.017x opt
+rep 28: fixed 320 calls -> 1.002x opt  dream 272 calls -> 1.028x opt
+rep 29: fixed 320 calls -> 1.002x opt  dream 177 calls -> 1.104x opt
+rep 30: fixed 320 calls -> 1.008x opt  dream 216 calls -> 1.104x opt
+rep 31: fixed 320 calls -> 1.000x opt  dream 256 calls -> 1.003x opt
+rep 32: fixed 320 calls -> 2.643x opt  dream 108 calls -> 2.643x opt
+rep 33: fixed 320 calls -> 1.274x opt  dream 230 calls -> 1.151x opt
+rep 34: fixed 320 calls -> 1.244x opt  dream 280 calls -> 1.244x opt
+rep 35: fixed 320 calls -> 1.054x opt  dream 296 calls -> 1.165x opt
+rep 36: fixed 320 calls -> 1.008x opt  dream 280 calls -> 1.244x opt
+rep 37: fixed 320 calls -> 1.002x opt  dream 229 calls -> 1.017x opt
+rep 38: fixed 320 calls -> 1.002x opt  dream 215 calls -> 1.342x opt
+rep 39: fixed 320 calls -> 1.008x opt  dream 240 calls -> 1.008x opt
+rep 40: fixed 320 calls -> 1.074x opt  dream 300 calls -> 1.054x opt
+rep 41: fixed 320 calls -> 1.065x opt  dream 276 calls -> 1.102x opt
+rep 42: fixed 320 calls -> 1.002x opt  dream 106 calls -> 1.546x opt
+rep 43: fixed 320 calls -> 1.002x opt  dream 320 calls -> 1.028x opt
+rep 44: fixed 320 calls -> 1.080x opt  dream 240 calls -> 1.072x opt
+rep 45: fixed 320 calls -> 1.028x opt  dream 196 calls -> 1.017x opt
+rep 46: fixed 320 calls -> 1.185x opt  dream 212 calls -> 1.185x opt
+rep 47: fixed 320 calls -> 1.017x opt  dream 296 calls -> 1.235x opt
+rep 48: fixed 320 calls -> 1.008x opt  dream 150 calls -> 1.008x opt
+rep 49: fixed 320 calls -> 1.017x opt  dream 276 calls -> 1.002x opt
+rep 50: fixed 320 calls -> 1.049x opt  dream 232 calls -> 1.021x opt
+rep 51: fixed 320 calls -> 1.002x opt  dream 280 calls -> 1.066x opt
+rep 52: fixed 320 calls -> 1.003x opt  dream 275 calls -> 1.054x opt
+rep 53: fixed 320 calls -> 1.008x opt  dream 264 calls -> 1.008x opt
+rep 54: fixed 320 calls -> 1.002x opt  dream 264 calls -> 1.072x opt
+rep 55: fixed 320 calls -> 1.008x opt  dream 296 calls -> 1.002x opt
+rep 56: fixed 320 calls -> 1.000x opt  dream 240 calls -> 1.000x opt
+rep 57: fixed 320 calls -> 1.028x opt  dream 268 calls -> 1.017x opt
+rep 58: fixed 320 calls -> 1.430x opt  dream 231 calls -> 1.074x opt
+rep 59: fixed 320 calls -> 1.002x opt  dream 296 calls -> 1.102x opt
+rep 60: fixed 320 calls -> 1.008x opt  dream 244 calls -> 1.081x opt
+rep 61: fixed 320 calls -> 1.008x opt  dream 171 calls -> 1.000x opt
+rep 62: fixed 320 calls -> 1.017x opt  dream 203 calls -> 1.100x opt
+rep 63: fixed 320 calls -> 1.008x opt  dream 304 calls -> 1.105x opt
+rep 64: fixed 320 calls -> 1.432x opt  dream 296 calls -> 1.002x opt
+rep 65: fixed 320 calls -> 1.362x opt  dream 304 calls -> 1.036x opt
+rep 66: fixed 320 calls -> 1.362x opt  dream 260 calls -> 1.036x opt
+rep 67: fixed 320 calls -> 1.392x opt  dream 169 calls -> 1.342x opt
+rep 68: fixed 320 calls -> 1.054x opt  dream 222 calls -> 1.008x opt
+rep 69: fixed 320 calls -> 1.244x opt  dream 194 calls -> 1.342x opt
+rep 70: fixed 320 calls -> 1.008x opt  dream 188 calls -> 1.017x opt
+rep 71: fixed 320 calls -> 2.643x opt  dream 87 calls -> 2.643x opt
+rep 72: fixed 320 calls -> 1.102x opt  dream 216 calls -> 1.000x opt
+rep 73: fixed 320 calls -> 1.000x opt  dream 276 calls -> 1.021x opt
+rep 74: fixed 320 calls -> 1.008x opt  dream 200 calls -> 1.017x opt
+rep 75: fixed 320 calls -> 1.028x opt  dream 276 calls -> 1.008x opt
+rep 76: fixed 320 calls -> 1.002x opt  dream 320 calls -> 1.028x opt
+rep 77: fixed 320 calls -> 1.244x opt  dream 228 calls -> 1.000x opt
+rep 78: fixed 320 calls -> 1.002x opt  dream 162 calls -> 1.002x opt
+rep 79: fixed 320 calls -> 1.244x opt  dream 264 calls -> 1.384x opt
+rep 80: fixed 320 calls -> 1.384x opt  dream 296 calls -> 1.384x opt
+rep 81: fixed 320 calls -> 1.274x opt  dream 240 calls -> 1.244x opt
+rep 82: fixed 320 calls -> 1.017x opt  dream 220 calls -> 1.017x opt
+rep 83: fixed 320 calls -> 1.362x opt  dream 208 calls -> 1.276x opt
+rep 84: fixed 320 calls -> 1.008x opt  dream 249 calls -> 1.017x opt
+rep 85: fixed 320 calls -> 1.244x opt  dream 264 calls -> 1.244x opt
+rep 86: fixed 320 calls -> 1.066x opt  dream 272 calls -> 1.002x opt
+rep 87: fixed 320 calls -> 1.066x opt  dream 226 calls -> 1.065x opt
+rep 88: fixed 320 calls -> 1.362x opt  dream 226 calls -> 1.003x opt
+rep 89: fixed 320 calls -> 1.095x opt  dream 264 calls -> 1.028x opt
+rep 90: fixed 320 calls -> 1.008x opt  dream 305 calls -> 1.066x opt
+rep 91: fixed 320 calls -> 1.274x opt  dream 212 calls -> 1.021x opt
+rep 92: fixed 320 calls -> 1.028x opt  dream 212 calls -> 1.028x opt
+rep 93: fixed 320 calls -> 1.244x opt  dream 277 calls -> 1.331x opt
+rep 94: fixed 320 calls -> 1.002x opt  dream 259 calls -> 1.003x opt
+rep 95: fixed 320 calls -> 1.055x opt  dream 253 calls -> 1.065x opt
+rep 96: fixed 320 calls -> 1.080x opt  dream 227 calls -> 1.066x opt
+rep 97: fixed 320 calls -> 1.244x opt  dream 320 calls -> 1.002x opt
+rep 98: fixed 320 calls -> 1.008x opt  dream 292 calls -> 1.000x opt
+rep 99: fixed 320 calls -> 1.002x opt  dream 268 calls -> 1.017x opt
+done in 79s
+round | fixed calls fixed /opt | dream calls dream /opt
+    1 |        40.0     1.2827 |        40.0     1.2827
+    2 |        80.0     1.1998 |        69.1     1.2230
+    3 |       120.0     1.1819 |        93.6     1.2025
+    4 |       160.0     1.1648 |       120.1     1.1641
+    5 |       200.0     1.1620 |       147.6     1.1561
+    6 |       240.0     1.1552 |       178.2     1.1361
+    7 |       280.0     1.1518 |       209.4     1.1306
+    8 |       320.0     1.1458 |       243.0     1.1289

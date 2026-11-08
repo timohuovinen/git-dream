@@ -1,0 +1,94 @@
+diff --git a/src/funnel.rs b/src/funnel.rs
+index 7728b91..2db864e 100644
+--- a/src/funnel.rs
++++ b/src/funnel.rs
+@@ -67,6 +67,14 @@ impl FunnelConfig {
+             name: format!("funnel-simd{}(L={levels},r={ratio})", G::W),
+         }
+     }
++    /// Like `simd`, but each level bucket spans `groups` consecutive SIMD groups
++    /// (β = groups·W). Lookups scan the whole bucket; the stop rule applies per bucket.
++    pub fn simd_groups<G: Group>(slots: usize, levels: usize, ratio: f64, overflow_frac: f64, groups: usize) -> Self {
++        let mut c = Self::simd::<G>(slots, levels, ratio, overflow_frac);
++        c.beta = G::W * groups.max(1);
++        c.name = format!("funnel-simd{}x{}(L={levels},r={ratio})", G::W, groups.max(1));
++        c
++    }
+     pub fn swiss<G: Group>(slots: usize) -> Self {
+         FunnelConfig {
+             slots,
+@@ -114,7 +122,7 @@ enum Step {
+ impl<G: Group> Funnel<G> {
+     pub fn new(cfg: FunnelConfig) -> Self {
+         let w = G::W;
+-        assert!(!cfg.simd || cfg.beta == w, "simd mode requires beta == group width");
++        assert!(!cfg.simd || (cfg.beta >= w && cfg.beta % w == 0), "simd mode requires beta = k * group width");
+         let slots = cfg.slots.max(w);
+         let ovf_slots = if cfg.levels == 0 {
+             slots.div_ceil(w) * w
+@@ -193,6 +201,33 @@ impl<G: Group> Funnel<G> {
+         if g.match_empty() != 0 { Step::Stop } else { Step::Next }
+     }
+ 
++    /// Bucket of `beta / W` SIMD groups: key may sit in any group, stop only if
++    /// the bucket as a whole has an EMPTY slot.
++    #[inline(always)]
++    fn scan_bucket<const FREE: bool>(&self, base: usize, t: u8, k: u64, free: &mut Option<usize>) -> Step {
++        let mut empty = false;
++        let mut b = base;
++        let end = base + self.beta;
++        while b < end {
++            let g = unsafe { G::load(ctrl_ptr(&self.ctrl).add(b)) };
++            for bit in Bits(g.match_tag(t)) {
++                let s = b + bit;
++                if unsafe { self.kv.get_unchecked(s).0 } == k {
++                    return Step::Found(s);
++                }
++            }
++            if FREE && free.is_none() {
++                let m = g.match_free();
++                if m != 0 {
++                    *free = Some(b + m.trailing_zeros() as usize);
++                }
++            }
++            empty |= g.match_empty() != 0;
++            b += G::W;
++        }
++        if empty { Step::Stop } else { Step::Next }
++    }
++
+     #[inline(always)]
+     fn scan_scalar<const FREE: bool>(&self, base: usize, t: u8, k: u64, free: &mut Option<usize>) -> Step {
+         let mut empty = false;
+@@ -220,8 +255,10 @@ impl<G: Group> Funnel<G> {
+             let x = if i == 0 { h } else { remix(h, lv.salt) };
+             let base = lv.start + fastrange(x, lv.nb) * self.beta;
+             probes += 1;
+-            let step = if self.simd {
++            let step = if self.simd && self.beta == G::W {
+                 self.scan_group::<FREE>(base, t, k, &mut free)
++            } else if self.simd {
++                self.scan_bucket::<FREE>(base, t, k, &mut free)
+             } else {
+                 self.scan_scalar::<FREE>(base, t, k, &mut free)
+             };
+diff --git a/tests/correctness.rs b/tests/correctness.rs
+index 35285a2..fd13c02 100644
+--- a/tests/correctness.rs
++++ b/tests/correctness.rs
+@@ -82,6 +82,15 @@ fn funnel_simd() {
+     }
+ }
+ 
++#[test]
++fn funnel_simd_groups() {
++    for s in SLOTS {
++        check(Funnel::<G16>::new(FunnelConfig::simd_groups::<G16>(s, 4, 0.5, 0.02, 2)), 0.97, 11);
++        check(Funnel::<G16>::new(FunnelConfig::simd_groups::<G16>(s, 3, 0.375, 0.01, 4)), 0.98, 12);
++        check(Funnel::<G64>::new(FunnelConfig::simd_groups::<G64>(s, 2, 0.25, 0.02, 2)), 0.98, 13);
++    }
++}
++
+ #[test]
+ fn elastic() {
+     for s in SLOTS {
