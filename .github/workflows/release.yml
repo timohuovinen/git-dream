@@ -1,0 +1,101 @@
+# Push a tag `vX.Y.Z` (matching Cargo.toml) to build and publish a GitHub release:
+#   linux amd64/arm64 (static musl) and windows amd64 binaries, plus SHA256SUMS.
+# Running it by hand (workflow_dispatch) or on a PR that changes this file only
+# builds; the archives are left as workflow artifacts.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            apt: gcc-aarch64-linux-gnu qemu-user
+            run: qemu-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+      # no dependency on the Visual C++ runtime
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+            [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $v"; exit 1; }
+            echo "VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+      - name: Cross tools
+        if: matrix.apt
+        run: sudo apt-get update -q && sudo apt-get install -yq ${{ matrix.apt }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Smoke test
+        run: ${{ matrix.run }} target/${{ matrix.target }}/release/git-dream --version
+      - name: Package
+        run: |
+          name=git-dream-$VERSION-${{ matrix.target }}
+          mkdir -p "$name" dist
+          cp README.md LICENSE "$name"/
+          if [ "${{ runner.os }}" = Windows ]; then
+            cp target/${{ matrix.target }}/release/git-dream.exe "$name"/
+            7z a -tzip "dist/$name.zip" "$name" >/dev/null
+          else
+            cp target/${{ matrix.target }}/release/git-dream "$name"/
+            tar czf "dist/$name.tar.gz" "$name"
+          fi
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            pre=; case "$TAG" in *-*) pre=--prerelease;; esac
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes --verify-tag $pre
+          fi

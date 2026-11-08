@@ -28,7 +28,16 @@ cargo install --git https://github.com/timohuovinen/git-dream   # installs `git-
 # from a checkout:     cargo install --path .
 ```
 
-It needs git ≥ 2.31 and `sh` at run time. The examples use only `sh` and `awk`.
+Or download a prebuilt binary from [Releases](https://github.com/timohuovinen/git-dream/releases): Linux amd64/arm64 (static, `*-unknown-linux-musl.tar.gz`) and Windows amd64 (`*-pc-windows-msvc.zip`). Put `git-dream` (`git-dream.exe`) anywhere on your `PATH`.
+
+```bash
+gh release download -R timohuovinen/git-dream -p '*x86_64-unknown-linux-musl.tar.gz'
+tar xzf git-dream-*.tar.gz && install git-dream-*/git-dream ~/.local/bin/
+```
+
+It needs git ≥ 2.31 and `sh` at run time. The examples use only `sh` and `awk`. On Windows, commands run in the `sh` that comes with [Git for Windows](https://gitforwindows.org/) (found next to `git`; override with `GIT_DREAM_SH`).
+
+**Releasing:** bump `version` in `Cargo.toml`, commit, then `git tag v0.2.0 && git push origin v0.2.0`. [.github/workflows/release.yml](.github/workflows/release.yml) builds the three binaries and publishes the release with `SHA256SUMS`.
 
 ## Quick start (seconds)
 
