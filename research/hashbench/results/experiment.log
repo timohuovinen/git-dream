@@ -1,0 +1,772 @@
+round 1 (shared, pi_0)
+  shared r1 n001 <- n000 W64-b1-L0-r0.5-o0.05     ok     49.26  best   49.26
+  shared r1 n002 <- n001 W16-b1-L0-r0.5-o0.05     ok     76.49  best   49.26
+  shared r1 n003 <- n001 W16-b1-L0-r0.5-o0.05     ok     71.09  best   49.26
+  shared r1 n004 <- n001 W16-b1-L0-r0.5-o0.05     ok     74.06  best   49.26
+  shared r1 n005 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n006 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n007 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n008 <- n001 W16-b1-L0-r0.5-o0.05     ok     72.01  best   49.26
+  shared r1 n009 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n010 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n011 <- n001 W16-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n012 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n013 <- n001 W16-b1-L0-r0.5-o0.05     ok     68.75  best   49.26
+  shared r1 n014 <- n001 W16-b1-L0-r0.5-o0.05     ok     69.06  best   49.26
+  shared r1 n015 <- n001 W16-b1-L0-r0.5-o0.05     ok     79.05  best   49.26
+  shared r1 n016 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n017 <- n001 W16-b1-L0-r0.5-o0.05     ok     78.60  best   49.26
+  shared r1 n018 <- n001 W16-b1-L0-r0.5-o0.05     ok     74.78  best   49.26
+  shared r1 n019 <- n001 W16-b1-L0-r0.5-o0.05     ok     69.21  best   49.26
+  shared r1 n020 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n021 <- n001 W16-b1-L0-r0.5-o0.05     ok     70.40  best   49.26
+  shared r1 n022 <- n001 W16-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n023 <- n001 W16-b1-L0-r0.5-o0.05     ok     75.43  best   49.26
+  shared r1 n024 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n025 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n026 <- n001 W16-b1-L0-r0.5-o0.05     ok     69.56  best   49.26
+  shared r1 n027 <- n001 W16-b1-L0-r0.5-o0.05     ok     76.37  best   49.26
+  shared r1 n028 <- n001 W16-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n029 <- n001 W64-b1-L1-r0.5-o0.05     full   best   49.26
+  shared r1 n030 <- n001 W16-b1-L0-r0.5-o0.05     ok     72.11  best   49.26
+  shared r1 n031 <- n001 W16-b1-L0-r0.5-o0.05     ok     78.25  best   49.26
+  shared r1 n032 <- n001 W64-b1-L2-r0.5-o0.05     ok     28.65  best   28.65
+  shared r1 n033 <- n032 W64-b1-L1-r0.5-o0.05     full   best   28.65
+  shared r1 n034 <- n032 W16-b1-L2-r0.75-o0.05    full   best   28.65
+  shared r1 n035 <- n032 W64-b1-L2-r0.625-o0.08   ok     31.77  best   28.65
+  shared r1 n036 <- n032 W64-b2-L2-r0.5-o0.05     ok     44.12  best   28.65
+  shared r1 n037 <- n032 W64-b1-L4-r0.5-o0.08     ok     43.70  best   28.65
+  shared r1 n038 <- n032 W16-b1-L2-r0.5-o0.05     full   best   28.65
+  shared r1 n039 <- n032 W64-b1-L2-r0.625-o0.05   ok     30.59  best   28.65
+  shared r1 n040 <- n032 W16-b1-L2-r0.5-o0.05     full   best   28.65
+  shared r1: 40 calls, best W64-b1-L2-r0.5-o0.05 28.65 ns/op (39s)
+fixed r2 policy refine_best() root W64-b1-L2-r0.5-o0.05 28.65
+  fixed r2 n001 <- n000 W64-b1-L1-r0.5-o0.05     full   best   28.65
+  fixed r2 n002 <- n000 W16-b1-L2-r0.75-o0.05    full   best   28.65
+  fixed r2 n003 <- n000 W64-b1-L2-r0.625-o0.08   ok     32.06  best   28.65
+  fixed r2 n004 <- n000 W64-b2-L2-r0.5-o0.05     ok     49.82  best   28.65
+  fixed r2 n005 <- n000 W64-b1-L4-r0.5-o0.08     ok     42.56  best   28.65
+  fixed r2 n006 <- n000 W16-b1-L2-r0.5-o0.05     full   best   28.65
+  fixed r2 n007 <- n000 W64-b1-L2-r0.625-o0.05   ok     29.62  best   28.65
+  fixed r2 n008 <- n000 W16-b1-L2-r0.5-o0.05     full   best   28.65
+  fixed r2 n009 <- n000 W64-b1-L2-r0.625-o0.12   ok     32.58  best   28.65
+  fixed r2 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     53.23  best   28.65
+  fixed r2 n011 <- n000 W64-b1-L2-r0.25-o0.05    ok     27.61  best   27.61
+  fixed r2 n012 <- n011 W64-b1-L0-r0.5-o0.05     ok     54.50  best   27.61
+  fixed r2 n013 <- n011 W16-b1-L2-r0.25-o0.05    full   best   27.61
+  fixed r2 n014 <- n011 W64-b1-L2-r0.25-o0.03    ok     29.16  best   27.61
+  fixed r2 n015 <- n011 W64-b1-L2-r0.25-o0.08    ok     27.67  best   27.61
+  fixed r2 n016 <- n011 W64-b1-L2-r0.375-o0.05   ok     27.61  best   27.61
+  fixed r2 n017 <- n011 W64-b1-L2-r0.25-o0.03    ok     25.78  best   25.78
+  fixed r2 n018 <- n017 W64-b1-L2-r0.25-o0.05    ok     27.45  best   25.78
+  fixed r2 n019 <- n017 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r2 n020 <- n017 W64-b2-L2-r0.25-o0.03    ok     41.89  best   25.78
+  fixed r2 n021 <- n017 W64-b1-L3-r0.25-o0.03    ok     31.83  best   25.78
+  fixed r2 n022 <- n017 W64-b1-L2-r0.25-o0.02    ok     26.33  best   25.78
+  fixed r2 n023 <- n017 W64-b1-L2-r0.25-o0.02    ok     25.98  best   25.78
+  fixed r2 n024 <- n017 W64-b1-L2-r0.25-o0.02    ok     26.55  best   25.78
+  fixed r2 n025 <- n017 W64-b1-L2-r0.5-o0.05     ok     31.43  best   25.78
+  fixed r2 n026 <- n017 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r2 n027 <- n017 W64-b1-L2-r0.25-o0.05    ok     26.54  best   25.78
+  fixed r2 n028 <- n017 W64-b1-L2-r0.25-o0.02    ok     25.98  best   25.78
+  fixed r2 n029 <- n017 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r2 n030 <- n017 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r2 n031 <- n017 W64-b1-L0-r0.5-o0.05     ok     53.10  best   25.78
+  fixed r2 n032 <- n017 W16-b1-L2-r0.25-o0.01    full   best   25.78
+  fixed r2 n033 <- n017 W64-b1-L1-r0.25-o0.03    full   best   25.78
+  fixed r2 n034 <- n017 W16-b1-L1-r0.25-o0.03    full   best   25.78
+  fixed r2 n035 <- n017 W16-b1-L2-r0.25-o0.05    full   best   25.78
+  fixed r2 n036 <- n017 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r2 n037 <- n017 W64-b1-L2-r0.375-o0.03   ok     27.08  best   25.78
+  fixed r2 n038 <- n017 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r2 n039 <- n017 W64-b1-L3-r0.25-o0.03    ok     33.08  best   25.78
+  fixed r2 n040 <- n017 W64-b1-L0-r0.5-o0.05     ok     53.31  best   25.78
+  fixed r2: 40 calls, best W64-b1-L2-r0.25-o0.03 25.78 ns/op (27s)
+dream r2: 1001 candidates in 0.1s; J 0.6292 (refine_best()) -> 0.6292 (refine_best()), miss 0.00
+dream r2 policy refine_best() root W64-b1-L2-r0.5-o0.05 28.65
+  dream r2 n001 <- n000 W64-b1-L1-r0.5-o0.05     full   best   28.65
+  dream r2 n002 <- n000 W16-b1-L2-r0.75-o0.05    full   best   28.65
+  dream r2 n003 <- n000 W64-b1-L2-r0.625-o0.08   ok     31.28  best   28.65
+  dream r2 n004 <- n000 W64-b2-L2-r0.5-o0.05     ok     44.77  best   28.65
+  dream r2 n005 <- n000 W64-b1-L4-r0.5-o0.08     ok     42.24  best   28.65
+  dream r2 n006 <- n000 W16-b1-L2-r0.5-o0.05     full   best   28.65
+  dream r2 n007 <- n000 W64-b1-L2-r0.625-o0.05   ok     30.39  best   28.65
+  dream r2 n008 <- n000 W16-b1-L2-r0.5-o0.05     full   best   28.65
+  dream r2 n009 <- n000 W64-b1-L2-r0.625-o0.12   ok     33.13  best   28.65
+  dream r2 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     56.95  best   28.65
+  dream r2 n011 <- n000 W64-b1-L2-r0.25-o0.05    ok     26.35  best   26.35
+  dream r2 n012 <- n011 W64-b1-L0-r0.5-o0.05     ok     54.95  best   26.35
+  dream r2 n013 <- n011 W16-b1-L2-r0.25-o0.05    full   best   26.35
+  dream r2 n014 <- n011 W64-b1-L2-r0.25-o0.03    ok     25.79  best   25.79
+  dream r2 n015 <- n014 W64-b1-L2-r0.25-o0.05    ok     26.71  best   25.79
+  dream r2 n016 <- n014 W16-b1-L2-r0.25-o0.03    full   best   25.79
+  dream r2 n017 <- n014 W64-b2-L2-r0.25-o0.03    ok     39.22  best   25.79
+  dream r2 n018 <- n014 W64-b1-L3-r0.25-o0.03    ok     28.01  best   25.79
+  dream r2 n019 <- n014 W64-b1-L2-r0.25-o0.02    ok     28.47  best   25.79
+  dream r2 n020 <- n014 W64-b1-L2-r0.25-o0.02    ok     25.45  best   25.45
+  dream r2 n021 <- n020 W64-b2-L2-r0.5-o0.02     ok     43.31  best   25.45
+  dream r2 n022 <- n020 W64-b1-L2-r0.25-o0.005   ok     24.73  best   24.73
+  dream r2 n023 <- n022 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r2 n024 <- n022 W64-b2-L2-r0.25-o0.005   ok     37.21  best   24.73
+  dream r2 n025 <- n022 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r2 n026 <- n022 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r2 n027 <- n022 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r2 n028 <- n022 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r2 n029 <- n022 W64-b1-L3-r0.25-o0.005   ok     26.55  best   24.73
+  dream r2 n030 <- n022 W64-b1-L2-r0.375-o0.01   ok     25.64  best   24.73
+  dream r2 n031 <- n022 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r2 n032 <- n022 W64-b1-L0-r0.5-o0.05     ok     53.13  best   24.73
+  dream r2 n033 <- n022 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r2 n034 <- n022 W64-b2-L2-r0.25-o0.005   ok     36.99  best   24.73
+  dream r2 n035 <- n022 W64-b1-L3-r0.25-o0.005   ok     27.39  best   24.73
+  dream r2 n036 <- n022 W64-b1-L3-r0.25-o0.005   ok     28.27  best   24.73
+  dream r2 n037 <- n022 W64-b2-L2-r0.25-o0.005   ok     37.97  best   24.73
+  dream r2 n038 <- n022 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r2 n039 <- n022 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r2 n040 <- n022 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r2: 40 calls, best W64-b1-L2-r0.25-o0.005 24.73 ns/op (25s)
+fixed r3 policy refine_best() root W64-b1-L2-r0.25-o0.03 25.78
+  fixed r3 n001 <- n000 W64-b1-L2-r0.25-o0.05    ok     28.85  best   25.78
+  fixed r3 n002 <- n000 W16-b1-L2-r0.25-o0.03    full   best   25.78
+  fixed r3 n003 <- n000 W64-b2-L2-r0.25-o0.03    ok     40.08  best   25.78
+  fixed r3 n004 <- n000 W64-b1-L3-r0.25-o0.03    ok     29.96  best   25.78
+  fixed r3 n005 <- n000 W64-b1-L2-r0.25-o0.02    ok     26.74  best   25.78
+  fixed r3 n006 <- n000 W64-b1-L2-r0.25-o0.02    ok     25.14  best   25.14
+  fixed r3 n007 <- n006 W64-b2-L2-r0.5-o0.02     ok     43.41  best   25.14
+  fixed r3 n008 <- n006 W64-b1-L2-r0.25-o0.005   ok     24.10  best   24.10
+  fixed r3 n009 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n010 <- n008 W64-b2-L2-r0.25-o0.005   ok     37.49  best   24.10
+  fixed r3 n011 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n012 <- n008 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r3 n013 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n014 <- n008 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r3 n015 <- n008 W64-b1-L3-r0.25-o0.005   ok     30.49  best   24.10
+  fixed r3 n016 <- n008 W64-b1-L2-r0.375-o0.01   ok     25.61  best   24.10
+  fixed r3 n017 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n018 <- n008 W64-b1-L0-r0.5-o0.05     ok     52.42  best   24.10
+  fixed r3 n019 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n020 <- n008 W64-b2-L2-r0.25-o0.005   ok     36.76  best   24.10
+  fixed r3 n021 <- n008 W64-b1-L3-r0.25-o0.005   ok     26.59  best   24.10
+  fixed r3 n022 <- n008 W64-b1-L3-r0.25-o0.005   ok     28.56  best   24.10
+  fixed r3 n023 <- n008 W64-b2-L2-r0.25-o0.005   ok     36.44  best   24.10
+  fixed r3 n024 <- n008 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r3 n025 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n026 <- n008 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r3 n027 <- n008 W64-b1-L3-r0.25-o0.005   ok     26.34  best   24.10
+  fixed r3 n028 <- n008 W64-b2-L2-r0.25-o0.005   ok     37.48  best   24.10
+  fixed r3 n029 <- n008 W64-b2-L2-r0.25-o0.005   ok     37.65  best   24.10
+  fixed r3 n030 <- n008 W64-b1-L3-r0.25-o0.005   ok     28.33  best   24.10
+  fixed r3 n031 <- n008 W64-b1-L0-r0.5-o0.05     ok     53.66  best   24.10
+  fixed r3 n032 <- n008 W64-b2-L2-r0.375-o0.005  ok     42.49  best   24.10
+  fixed r3 n033 <- n008 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r3 n034 <- n008 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r3 n035 <- n008 W64-b1-L3-r0.25-o0.01    ok     26.83  best   24.10
+  fixed r3 n036 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n037 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n038 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3 n039 <- n008 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r3 n040 <- n008 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r3: 40 calls, best W64-b1-L2-r0.25-o0.005 24.10 ns/op (22s)
+dream r3: 1001 candidates in 0.2s; J 0.3729 (refine_best()) -> 0.3729 (refine_best()), miss 0.00
+dream r3 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.73
+  dream r3 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     36.90  best   24.73
+  dream r3 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r3 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r3 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     25.87  best   24.73
+  dream r3 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     26.14  best   24.73
+  dream r3 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     55.87  best   24.73
+  dream r3 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     46.26  best   24.73
+  dream r3 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     28.00  best   24.73
+  dream r3 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.89  best   24.73
+  dream r3 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     36.66  best   24.73
+  dream r3 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r3 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r3 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.18  best   24.73
+  dream r3 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     39.91  best   24.73
+  dream r3 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.91  best   24.73
+  dream r3 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.60  best   24.73
+  dream r3 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     52.40  best   24.73
+  dream r3 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     39.54  best   24.73
+  dream r3 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r3 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r3 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     34.52  best   24.73
+  dream r3 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r3 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r3 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r3 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r3 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     28.10  best   24.73
+  dream r3 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     29.49  best   24.73
+  dream r3 n038 <- n000 W64-b2-L2-r0.375-o0.005  ok     40.22  best   24.73
+  dream r3 n039 <- n000 W64-b1-L0-r0.5-o0.05     ok     52.34  best   24.73
+  dream r3 n040 <- n000 W64-b2-L2-r0.25-o0.005   ok     39.09  best   24.73
+  dream r3: 40 calls, best W64-b1-L2-r0.25-o0.005 24.73 ns/op (22s)
+fixed r4 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.10
+  fixed r4 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.42  best   24.10
+  fixed r4 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r4 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r4 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.73  best   24.10
+  fixed r4 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     26.09  best   24.10
+  fixed r4 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     53.08  best   24.10
+  fixed r4 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.10  best   24.10
+  fixed r4 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.82  best   24.10
+  fixed r4 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.55  best   24.10
+  fixed r4 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.43  best   24.10
+  fixed r4 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r4 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r4 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     28.99  best   24.10
+  fixed r4 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     40.30  best   24.10
+  fixed r4 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     42.40  best   24.10
+  fixed r4 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.36  best   24.10
+  fixed r4 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     53.41  best   24.10
+  fixed r4 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     40.42  best   24.10
+  fixed r4 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r4 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r4 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     27.23  best   24.10
+  fixed r4 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r4 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r4 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r4 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r4 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     29.43  best   24.10
+  fixed r4 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     26.83  best   24.10
+  fixed r4 n038 <- n000 W64-b2-L2-r0.375-o0.005  ok     40.05  best   24.10
+  fixed r4 n039 <- n000 W64-b1-L0-r0.5-o0.05     ok     56.40  best   24.10
+  fixed r4 n040 <- n000 W64-b2-L2-r0.25-o0.005   ok     39.16  best   24.10
+  fixed r4: 40 calls, best W64-b1-L2-r0.25-o0.005 24.10 ns/op (22s)
+dream r4: 1001 candidates in 0.2s; J 0.2419 (refine_best()) -> 0.2419 (refine_best()), miss 0.00
+dream r4 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.73
+  dream r4 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.86  best   24.73
+  dream r4 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r4 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r4 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     28.39  best   24.73
+  dream r4 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     26.32  best   24.73
+  dream r4 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     54.46  best   24.73
+  dream r4 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.44  best   24.73
+  dream r4 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     28.10  best   24.73
+  dream r4 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.95  best   24.73
+  dream r4 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.90  best   24.73
+  dream r4 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r4 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r4 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.75  best   24.73
+  dream r4 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.66  best   24.73
+  dream r4 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     36.61  best   24.73
+  dream r4 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.20  best   24.73
+  dream r4 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     51.92  best   24.73
+  dream r4 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     39.94  best   24.73
+  dream r4 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r4 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r4 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     27.00  best   24.73
+  dream r4 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.73
+  dream r4 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r4 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.73
+  dream r4 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.73
+  dream r4 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     28.46  best   24.73
+  dream r4 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     24.17  best   24.17
+  dream r4 n038 <- n037 W64-b2-L2-r0.5-o0.02     ok     46.93  best   24.17
+  dream r4 n039 <- n037 W64-b1-L2-r0.25-o0.005   ok     25.60  best   24.17
+  dream r4 n040 <- n037 W64-b1-L2-r0.25-o0.005   ok     28.71  best   24.17
+  dream r4: 40 calls, best W64-b1-L2-r0.25-o0.02 24.17 ns/op (21s)
+fixed r5 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.10
+  fixed r5 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     46.59  best   24.10
+  fixed r5 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r5 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r5 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     32.43  best   24.10
+  fixed r5 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     31.05  best   24.10
+  fixed r5 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     57.42  best   24.10
+  fixed r5 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     41.56  best   24.10
+  fixed r5 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.25  best   24.10
+  fixed r5 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.94  best   24.10
+  fixed r5 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.30  best   24.10
+  fixed r5 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r5 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r5 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.89  best   24.10
+  fixed r5 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.13  best   24.10
+  fixed r5 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.82  best   24.10
+  fixed r5 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.85  best   24.10
+  fixed r5 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     54.09  best   24.10
+  fixed r5 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     40.18  best   24.10
+  fixed r5 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r5 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r5 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     27.57  best   24.10
+  fixed r5 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r5 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r5 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r5 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r5 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     27.88  best   24.10
+  fixed r5 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     28.84  best   24.10
+  fixed r5 n038 <- n000 W64-b2-L2-r0.375-o0.005  ok     40.08  best   24.10
+  fixed r5 n039 <- n000 W64-b1-L0-r0.5-o0.05     ok     52.52  best   24.10
+  fixed r5 n040 <- n000 W64-b2-L2-r0.25-o0.005   ok     36.79  best   24.10
+  fixed r5: 40 calls, best W64-b1-L2-r0.25-o0.005 24.10 ns/op (23s)
+dream r5: 1001 candidates in 0.2s; J 0.1822 (refine_best()) -> 0.1822 (refine_best()), miss 0.00
+dream r5 policy refine_best() root W64-b1-L2-r0.25-o0.02 24.17
+  dream r5 n001 <- n000 W64-b2-L2-r0.5-o0.02     ok     41.95  best   24.17
+  dream r5 n002 <- n000 W64-b1-L2-r0.25-o0.005   ok     24.55  best   24.17
+  dream r5 n003 <- n000 W64-b1-L2-r0.25-o0.005   ok     25.10  best   24.17
+  dream r5 n004 <- n000 W64-b1-L4-r0.25-o0.02    ok     30.15  best   24.17
+  dream r5 n005 <- n000 W64-b1-L3-r0.25-o0.02    ok     29.01  best   24.17
+  dream r5 n006 <- n000 W64-b1-L2-r0.25-o0.01    ok     25.52  best   24.17
+  dream r5 n007 <- n000 W64-b1-L2-r0.25-o0.01    ok     25.05  best   24.17
+  dream r5 n008 <- n000 W64-b2-L2-r0.25-o0.02    ok     38.39  best   24.17
+  dream r5 n009 <- n000 W64-b1-L1-r0.25-o0.03    full   best   24.17
+  dream r5 n010 <- n000 W64-b1-L2-r0.25-o0.03    ok     25.22  best   24.17
+  dream r5 n011 <- n000 W64-b1-L2-r0.25-o0.03    ok     25.49  best   24.17
+  dream r5 n012 <- n000 W64-b1-L2-r0.375-o0.02   ok     26.65  best   24.17
+  dream r5 n013 <- n000 W16-b1-L2-r0.25-o0.02    full   best   24.17
+  dream r5 n014 <- n000 W16-b1-L3-r0.25-o0.02    ok     21.70  best   21.70
+  dream r5 n015 <- n014 W16-b2-L3-r0.25-o0.02    ok     27.73  best   21.70
+  dream r5 n016 <- n014 W16-b2-L3-r0.25-o0.02    ok     31.40  best   21.70
+  dream r5 n017 <- n014 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r5 n018 <- n014 W16-b1-L4-r0.25-o0.02    ok     22.36  best   21.70
+  dream r5 n019 <- n014 W16-b1-L3-r0.375-o0.02   ok     23.03  best   21.70
+  dream r5 n020 <- n014 W16-b2-L3-r0.25-o0.02    ok     29.23  best   21.70
+  dream r5 n021 <- n014 W16-b1-L3-r0.5-o0.02     ok     24.37  best   21.70
+  dream r5 n022 <- n014 W16-b1-L4-r0.25-o0.03    ok     23.36  best   21.70
+  dream r5 n023 <- n014 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r5 n024 <- n014 W16-b1-L4-r0.25-o0.02    ok     22.89  best   21.70
+  dream r5 n025 <- n014 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r5 n026 <- n014 W16-b1-L3-r0.25-o0.005   full   best   21.70
+  dream r5 n027 <- n014 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r5 n028 <- n014 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r5 n029 <- n014 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r5 n030 <- n014 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r5 n031 <- n014 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r5 n032 <- n014 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r5 n033 <- n014 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r5 n034 <- n014 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r5 n035 <- n014 W16-b2-L3-r0.375-o0.02   ok     31.68  best   21.70
+  dream r5 n036 <- n014 W16-b1-L3-r0.5-o0.02     ok     24.35  best   21.70
+  dream r5 n037 <- n014 W16-b1-L5-r0.25-o0.05    ok     24.85  best   21.70
+  dream r5 n038 <- n014 W16-b1-L1-r0.25-o0.02    full   best   21.70
+  dream r5 n039 <- n014 W64-b1-L3-r0.25-o0.005   ok     27.32  best   21.70
+  dream r5 n040 <- n014 W16-b2-L3-r0.25-o0.02    ok     29.48  best   21.70
+  dream r5: 40 calls, best W16-b1-L3-r0.25-o0.02 21.70 ns/op (23s)
+fixed r6 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.10
+  fixed r6 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.21  best   24.10
+  fixed r6 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r6 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r6 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.51  best   24.10
+  fixed r6 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     27.28  best   24.10
+  fixed r6 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     54.04  best   24.10
+  fixed r6 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.15  best   24.10
+  fixed r6 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.32  best   24.10
+  fixed r6 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.52  best   24.10
+  fixed r6 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     51.75  best   24.10
+  fixed r6 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r6 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r6 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     34.84  best   24.10
+  fixed r6 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.29  best   24.10
+  fixed r6 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.14  best   24.10
+  fixed r6 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.64  best   24.10
+  fixed r6 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     51.74  best   24.10
+  fixed r6 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     39.47  best   24.10
+  fixed r6 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r6 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r6 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     26.56  best   24.10
+  fixed r6 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   24.10
+  fixed r6 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r6 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   24.10
+  fixed r6 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   24.10
+  fixed r6 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     27.57  best   24.10
+  fixed r6 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     26.66  best   24.10
+  fixed r6 n038 <- n000 W64-b2-L2-r0.375-o0.005  ok     39.60  best   24.10
+  fixed r6 n039 <- n000 W64-b1-L0-r0.5-o0.05     ok     54.23  best   24.10
+  fixed r6 n040 <- n000 W64-b2-L2-r0.25-o0.005   ok     43.48  best   24.10
+  fixed r6: 40 calls, best W64-b1-L2-r0.25-o0.005 24.10 ns/op (22s)
+dream r6: 1001 candidates in 0.4s; J 0.1622 (refine_best()) -> 0.1622 (refine_best()), miss 0.00
+dream r6 policy refine_best() root W16-b1-L3-r0.25-o0.02 21.70
+  dream r6 n001 <- n000 W16-b2-L3-r0.25-o0.02    ok     31.17  best   21.70
+  dream r6 n002 <- n000 W16-b2-L3-r0.25-o0.02    ok     28.23  best   21.70
+  dream r6 n003 <- n000 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r6 n004 <- n000 W16-b1-L4-r0.25-o0.02    ok     23.20  best   21.70
+  dream r6 n005 <- n000 W16-b1-L3-r0.375-o0.02   ok     24.72  best   21.70
+  dream r6 n006 <- n000 W16-b2-L3-r0.25-o0.02    ok     29.00  best   21.70
+  dream r6 n007 <- n000 W16-b1-L3-r0.5-o0.02     ok     23.97  best   21.70
+  dream r6 n008 <- n000 W16-b1-L4-r0.25-o0.03    ok     22.51  best   21.70
+  dream r6 n009 <- n000 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r6 n010 <- n000 W16-b1-L4-r0.25-o0.02    ok     23.59  best   21.70
+  dream r6 n011 <- n000 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r6 n012 <- n000 W16-b1-L3-r0.25-o0.005   full   best   21.70
+  dream r6 n013 <- n000 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r6 n014 <- n000 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r6 n015 <- n000 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r6 n016 <- n000 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r6 n017 <- n000 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r6 n018 <- n000 W16-b1-L3-r0.25-o0.01    full   best   21.70
+  dream r6 n019 <- n000 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r6 n020 <- n000 W16-b1-L2-r0.25-o0.02    full   best   21.70
+  dream r6 n021 <- n000 W16-b2-L3-r0.375-o0.02   ok     30.97  best   21.70
+  dream r6 n022 <- n000 W16-b1-L3-r0.5-o0.02     ok     24.35  best   21.70
+  dream r6 n023 <- n000 W16-b1-L5-r0.25-o0.05    ok     24.46  best   21.70
+  dream r6 n024 <- n000 W16-b1-L1-r0.25-o0.02    full   best   21.70
+  dream r6 n025 <- n000 W64-b1-L3-r0.25-o0.005   ok     33.59  best   21.70
+  dream r6 n026 <- n000 W16-b2-L3-r0.25-o0.02    ok     28.13  best   21.70
+  dream r6 n027 <- n000 W16-b1-L3-r0.5-o0.02     ok     23.41  best   21.70
+  dream r6 n028 <- n000 W16-b2-L4-r0.25-o0.02    ok     28.98  best   21.70
+  dream r6 n029 <- n000 W16-b1-L3-r0.375-o0.03   ok     22.39  best   21.70
+  dream r6 n030 <- n000 W64-b1-L3-r0.25-o0.02    ok     28.57  best   21.70
+  dream r6 n031 <- n000 W16-b2-L3-r0.25-o0.005   ok     27.06  best   21.70
+  dream r6 n032 <- n000 W16-b2-L3-r0.25-o0.02    ok     28.68  best   21.70
+  dream r6 n033 <- n000 W16-b2-L3-r0.25-o0.02    ok     29.11  best   21.70
+  dream r6 n034 <- n000 W64-b1-L3-r0.25-o0.02    ok     28.48  best   21.70
+  dream r6 n035 <- n000 W16-b1-L4-r0.25-o0.02    ok     23.13  best   21.70
+  dream r6 n036 <- n000 W16-b1-L3-r0.375-o0.02   ok     22.02  best   21.70
+  dream r6 n037 <- n000 W16-b1-L3-r0.375-o0.02   ok     22.92  best   21.70
+  dream r6 n038 <- n000 W16-b1-L3-r0.25-o0.005   full   best   21.70
+  dream r6 n039 <- n000 W16-b1-L3-r0.25-o0.03    ok     22.57  best   21.70
+  dream r6 n040 <- n000 W16-b1-L3-r0.5-o0.01     full   best   21.70
+  dream r6: 40 calls, best W16-b1-L3-r0.25-o0.02 21.70 ns/op (23s)
+evaluator calls this session: 441
+fixed r2 already in git, skipping
+dream r2 already in git, skipping
+fixed r3 already in git, skipping
+dream r3 already in git, skipping
+fixed r4 already in git, skipping
+dream r4 already in git, skipping
+fixed r5 already in git, skipping
+dream r5 already in git, skipping
+fixed r6 already in git, skipping
+dream r6 already in git, skipping
+fixed r7 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.10
+  fixed r7 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     36.44  best   25.27
+  fixed r7 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   25.27
+  fixed r7 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   25.27
+  fixed r7 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     25.95  best   25.27
+  fixed r7 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     25.34  best   25.27
+  fixed r7 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     49.69  best   25.27
+  fixed r7 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     35.77  best   25.27
+  fixed r7 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     26.42  best   25.27
+  fixed r7 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     28.01  best   25.27
+  fixed r7 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.22  best   25.27
+  fixed r7 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   25.27
+  fixed r7 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   25.27
+  fixed r7 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.39  best   25.27
+  fixed r7 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.59  best   25.27
+  fixed r7 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.75  best   25.27
+  fixed r7 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     29.15  best   25.27
+  fixed r7 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     52.98  best   25.27
+  fixed r7 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     38.61  best   25.27
+  fixed r7 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   25.27
+  fixed r7 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   25.27
+  fixed r7 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     30.89  best   25.27
+  fixed r7 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   25.27
+  fixed r7 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   25.27
+  fixed r7 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   25.27
+  fixed r7 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   25.27
+  fixed r7 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     27.04  best   25.27
+  fixed r7 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     24.58  best   24.58
+  fixed r7 n038 <- n037 W64-b2-L2-r0.5-o0.02     ok     44.07  best   24.58
+  fixed r7 n039 <- n037 W64-b1-L2-r0.25-o0.005   ok     25.84  best   24.58
+  fixed r7 n040 <- n037 W64-b1-L2-r0.25-o0.005   ok     25.52  best   24.58
+  fixed r7: 40 calls, best W64-b1-L2-r0.25-o0.02 24.58 ns/op (21s)
+dream r7: 1001 candidates in 0.5s; J 0.1318 (refine_best()) -> 0.3216 (repair(c=0.02,fp=0.3,kmax=3,kfail=4,patience=16,eps=0.02,dedup=True)), miss 0.58
+dream r7 policy repair(c=0.02,fp=0.3,kmax=3,kfail=4,patience=16,eps=0.02,dedup=True) root W16-b1-L3-r0.25-o0.02 21.70
+  dream r7 n001 <- n000 W16-b2-L3-r0.25-o0.02    ok     30.86  best   23.90
+  dream r7 n002 <- n000 W16-b2-L3-r0.25-o0.02    ok     31.45  best   23.90
+  dream r7 n003 <- n000 W16-b1-L2-r0.25-o0.02    full   best   23.90
+  dream r7 n004 <- n003 W16-b1-L4-r0.25-o0.005   ok     23.58  best   23.58
+  dream r7 n005 <- n004 W16-b1-L4-r0.25-o0.01    ok     23.80  best   23.58
+  dream r7 n006 <- n004 W16-b2-L4-r0.25-o0.01    ok     32.36  best   23.58
+  dream r7 n007 <- n005 W64-b1-L3-r0.25-o0.01    ok     28.66  best   23.58
+  dream r7 n008 <- n004 W64-b1-L4-r0.5-o0.005    ok     38.75  best   23.58
+  dream r7 n009 <- n005 W16-b1-L4-r0.25-o0.005   ok     25.77  best   23.58
+  dream r7 n010 <- n005 W16-b2-L4-r0.25-o0.01    ok     31.27  best   23.58
+  dream r7 n011 <- n007 W16-b1-L2-r0.25-o0.01    full   best   23.58
+  dream r7 n012 <- n007 W64-b1-L3-r0.375-o0.01   ok     31.62  best   23.58
+  dream r7 n013 <- n007 W64-b1-L3-r0.375-o0.01   ok     31.50  best   23.58
+  dream r7 n014 <- n001 W16-b2-L4-r0.25-o0.02    ok     33.32  best   23.58
+  dream r7 n015 <- n003 W16-b2-L2-r0.25-o0.02    ok     28.30  best   23.58
+  dream r7 n016 <- n015 W16-b2-L2-r0.25-o0.05    ok     30.95  best   23.58
+  dream r7: 16 calls, best W16-b1-L4-r0.25-o0.005 23.58 ns/op (12s)
+fixed r8 policy refine_best() root W64-b1-L2-r0.25-o0.02 24.58
+  fixed r8 n001 <- n000 W64-b2-L2-r0.5-o0.02     ok     43.92  best   25.79
+  fixed r8 n002 <- n000 W64-b1-L2-r0.25-o0.005   ok     26.56  best   25.79
+  fixed r8 n003 <- n000 W64-b1-L2-r0.25-o0.005   ok     26.01  best   25.79
+  fixed r8 n004 <- n000 W64-b1-L4-r0.25-o0.02    ok     34.13  best   25.79
+  fixed r8 n005 <- n000 W64-b1-L3-r0.25-o0.02    ok     29.43  best   25.79
+  fixed r8 n006 <- n000 W64-b1-L2-r0.25-o0.01    ok     28.39  best   25.79
+  fixed r8 n007 <- n000 W64-b1-L2-r0.25-o0.01    ok     26.07  best   25.79
+  fixed r8 n008 <- n000 W64-b2-L2-r0.25-o0.02    ok     39.69  best   25.79
+  fixed r8 n009 <- n000 W64-b1-L1-r0.25-o0.03    full   best   25.79
+  fixed r8 n010 <- n000 W64-b1-L2-r0.25-o0.03    ok     28.80  best   25.79
+  fixed r8 n011 <- n000 W64-b1-L2-r0.25-o0.03    ok     25.68  best   25.68
+  fixed r8 n012 <- n011 W64-b1-L2-r0.25-o0.05    ok     26.95  best   25.68
+  fixed r8 n013 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n014 <- n011 W64-b2-L2-r0.25-o0.03    ok     39.83  best   25.68
+  fixed r8 n015 <- n011 W64-b1-L3-r0.25-o0.03    ok     30.15  best   25.68
+  fixed r8 n016 <- n011 W64-b1-L2-r0.25-o0.02    ok     27.43  best   25.68
+  fixed r8 n017 <- n011 W64-b1-L2-r0.25-o0.02    ok     27.27  best   25.68
+  fixed r8 n018 <- n011 W64-b1-L2-r0.25-o0.02    ok     29.85  best   25.68
+  fixed r8 n019 <- n011 W64-b1-L2-r0.5-o0.05     ok     29.94  best   25.68
+  fixed r8 n020 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n021 <- n011 W64-b1-L2-r0.25-o0.05    ok     27.05  best   25.68
+  fixed r8 n022 <- n011 W64-b1-L2-r0.25-o0.02    ok     26.52  best   25.68
+  fixed r8 n023 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n024 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n025 <- n011 W64-b1-L0-r0.5-o0.05     ok     54.41  best   25.68
+  fixed r8 n026 <- n011 W16-b1-L2-r0.25-o0.01    full   best   25.68
+  fixed r8 n027 <- n011 W64-b1-L1-r0.25-o0.03    full   best   25.68
+  fixed r8 n028 <- n011 W16-b1-L1-r0.25-o0.03    full   best   25.68
+  fixed r8 n029 <- n011 W16-b1-L2-r0.25-o0.05    full   best   25.68
+  fixed r8 n030 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n031 <- n011 W64-b1-L2-r0.375-o0.03   ok     27.79  best   25.68
+  fixed r8 n032 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n033 <- n011 W64-b1-L3-r0.25-o0.03    ok     29.79  best   25.68
+  fixed r8 n034 <- n011 W64-b1-L0-r0.5-o0.05     ok     55.14  best   25.68
+  fixed r8 n035 <- n011 W64-b1-L2-r0.25-o0.02    ok     26.66  best   25.68
+  fixed r8 n036 <- n011 W64-b1-L2-r0.5-o0.03     ok     29.12  best   25.68
+  fixed r8 n037 <- n011 W64-b1-L2-r0.25-o0.05    ok     29.77  best   25.68
+  fixed r8 n038 <- n011 W16-b1-L2-r0.25-o0.03    full   best   25.68
+  fixed r8 n039 <- n011 W64-b2-L2-r0.25-o0.03    ok     39.46  best   25.68
+  fixed r8 n040 <- n011 W64-b2-L2-r0.25-o0.03    ok     39.16  best   25.68
+  fixed r8: 40 calls, best W64-b1-L2-r0.25-o0.03 25.68 ns/op (27s)
+dream r8: 1001 candidates in 0.7s; J 0.0995 (repair(c=0.02,fp=0.3,kmax=3,kfail=4,patience=16,eps=0.02,dedup=True)) -> 0.3193 (repair(c=0.0,fp=0.01,kmax=3,kfail=4,patience=16,eps=0.005,dedup=True)), miss 0.50
+dream r8 policy repair(c=0.0,fp=0.01,kmax=3,kfail=4,patience=16,eps=0.005,dedup=True) root W16-b1-L4-r0.25-o0.005 23.58
+  dream r8 n001 <- n000 W16-b1-L4-r0.25-o0.01    ok     21.80  best   21.80
+  dream r8 n002 <- n001 W64-b1-L3-r0.25-o0.01    ok     28.18  best   21.80
+  dream r8 n003 <- n001 W16-b1-L4-r0.25-o0.005   ok     27.63  best   21.80
+  dream r8 n004 <- n001 W16-b2-L4-r0.25-o0.01    ok     30.89  best   21.80
+  dream r8 n005 <- n000 W16-b2-L4-r0.25-o0.01    ok     30.98  best   21.80
+  dream r8 n006 <- n000 W64-b1-L4-r0.5-o0.005    ok     39.53  best   21.80
+  dream r8 n007 <- n002 W16-b1-L2-r0.25-o0.01    full   best   21.80
+  dream r8 n008 <- n002 W64-b1-L3-r0.375-o0.01   ok     31.16  best   21.80
+  dream r8 n009 <- n002 W64-b1-L3-r0.375-o0.01   ok     32.07  best   21.80
+  dream r8 n010 <- n007 W16-b2-L2-r0.25-o0.01    full   best   21.80
+  dream r8 n011 <- n010 W16-b2-L4-r0.25-o0.005   ok     31.39  best   21.80
+  dream r8 n012 <- n010 W64-b2-L1-r0.25-o0.01    full   best   21.80
+  dream r8 n013 <- n012 W16-b2-L1-r0.25-o0.01    full   best   21.80
+  dream r8 n014 <- n013 W16-b2-L1-r0.25-o0.03    full   best   21.80
+  dream r8 n015 <- n014 W16-b1-L0-r0.5-o0.05     ok     95.70  best   21.80
+  dream r8 n016 <- n014 W16-b2-L1-r0.25-o0.02    full   best   21.80
+  dream r8 n017 <- n016 W16-b2-L2-r0.25-o0.03    ok     28.93  best   21.80
+  dream r8: 17 calls, best W16-b1-L4-r0.25-o0.01 21.80 ns/op (11s)
+fixed r9 policy refine_best() root W64-b1-L2-r0.25-o0.03 25.68
+  fixed r9 n001 <- n000 W64-b1-L2-r0.25-o0.05    ok     27.82  best   26.89
+  fixed r9 n002 <- n000 W16-b1-L2-r0.25-o0.03    full   best   26.89
+  fixed r9 n003 <- n000 W64-b2-L2-r0.25-o0.03    ok     47.70  best   26.89
+  fixed r9 n004 <- n000 W64-b1-L3-r0.25-o0.03    ok     30.71  best   26.89
+  fixed r9 n005 <- n000 W64-b1-L2-r0.25-o0.02    ok     26.09  best   26.09
+  fixed r9 n006 <- n005 W64-b2-L2-r0.5-o0.02     ok     43.34  best   26.09
+  fixed r9 n007 <- n005 W64-b1-L2-r0.25-o0.005   ok     24.98  best   24.98
+  fixed r9 n008 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n009 <- n007 W64-b2-L2-r0.25-o0.005   ok     39.85  best   24.98
+  fixed r9 n010 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n011 <- n007 W64-b1-L2-r0.375-o0.005  full   best   24.98
+  fixed r9 n012 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n013 <- n007 W64-b1-L2-r0.375-o0.005  full   best   24.98
+  fixed r9 n014 <- n007 W64-b1-L3-r0.25-o0.005   ok     27.43  best   24.98
+  fixed r9 n015 <- n007 W64-b1-L2-r0.375-o0.01   ok     26.30  best   24.98
+  fixed r9 n016 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n017 <- n007 W64-b1-L0-r0.5-o0.05     ok     52.66  best   24.98
+  fixed r9 n018 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n019 <- n007 W64-b2-L2-r0.25-o0.005   ok     38.90  best   24.98
+  fixed r9 n020 <- n007 W64-b1-L3-r0.25-o0.005   ok     28.11  best   24.98
+  fixed r9 n021 <- n007 W64-b1-L3-r0.25-o0.005   ok     28.26  best   24.98
+  fixed r9 n022 <- n007 W64-b2-L2-r0.25-o0.005   ok     38.69  best   24.98
+  fixed r9 n023 <- n007 W64-b1-L1-r0.25-o0.005   full   best   24.98
+  fixed r9 n024 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n025 <- n007 W64-b1-L1-r0.25-o0.005   full   best   24.98
+  fixed r9 n026 <- n007 W64-b1-L3-r0.25-o0.005   ok     27.96  best   24.98
+  fixed r9 n027 <- n007 W64-b2-L2-r0.25-o0.005   ok     39.20  best   24.98
+  fixed r9 n028 <- n007 W64-b2-L2-r0.25-o0.005   ok     39.91  best   24.98
+  fixed r9 n029 <- n007 W64-b1-L3-r0.25-o0.005   ok     28.92  best   24.98
+  fixed r9 n030 <- n007 W64-b1-L0-r0.5-o0.05     ok     56.99  best   24.98
+  fixed r9 n031 <- n007 W64-b2-L2-r0.375-o0.005  ok     41.74  best   24.98
+  fixed r9 n032 <- n007 W64-b1-L1-r0.25-o0.005   full   best   24.98
+  fixed r9 n033 <- n007 W64-b1-L1-r0.25-o0.005   full   best   24.98
+  fixed r9 n034 <- n007 W64-b1-L3-r0.25-o0.01    ok     27.83  best   24.98
+  fixed r9 n035 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n036 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n037 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n038 <- n007 W64-b1-L1-r0.25-o0.005   full   best   24.98
+  fixed r9 n039 <- n007 W16-b1-L2-r0.25-o0.005   full   best   24.98
+  fixed r9 n040 <- n007 W64-b1-L2-r0.375-o0.005  full   best   24.98
+  fixed r9: 40 calls, best W64-b1-L2-r0.25-o0.005 24.98 ns/op (22s)
+dream r9: 1001 candidates in 0.7s; J 0.0890 (repair(c=0.0,fp=0.01,kmax=3,kfail=4,patience=16,eps=0.005,dedup=True)) -> 0.1242 (ucb(c=0.05,kmax=inf,patience=inf,eps=0.005)), miss 0.22
+dream r9 policy ucb(c=0.05,kmax=inf,patience=inf,eps=0.005) root W16-b1-L4-r0.25-o0.01 21.80
+  dream r9 n001 <- n000 W64-b1-L3-r0.25-o0.01    ok     27.42  best   23.44
+  dream r9 n002 <- n000 W16-b1-L4-r0.25-o0.005   ok     22.20  best   22.20
+  dream r9 n003 <- n002 W16-b1-L4-r0.25-o0.01    ok     22.84  best   22.20
+  dream r9 n004 <- n002 W16-b2-L4-r0.25-o0.01    ok     30.48  best   22.20
+  dream r9 n005 <- n002 W64-b1-L4-r0.5-o0.005    ok     45.92  best   22.20
+  dream r9 n006 <- n003 W64-b1-L3-r0.25-o0.01    ok     28.42  best   22.20
+  dream r9 n007 <- n002 W16-b2-L4-r0.25-o0.005   ok     31.59  best   22.20
+  dream r9 n008 <- n002 W64-b1-L4-r0.25-o0.005   ok     29.35  best   22.20
+  dream r9 n009 <- n002 W16-b2-L4-r0.25-o0.005   ok     28.82  best   22.20
+  dream r9 n010 <- n002 W16-b1-L6-r0.25-o0.005   ok     25.01  best   22.20
+  dream r9 n011 <- n002 W16-b1-L5-r0.25-o0.005   ok     22.56  best   22.20
+  dream r9 n012 <- n011 W16-b1-L6-r0.25-o0.005   ok     22.22  best   22.20
+  dream r9 n013 <- n012 W16-b1-L5-r0.25-o0.005   ok     26.12  best   22.20
+  dream r9 n014 <- n012 W16-b1-L8-r0.375-o0.005  ok     29.61  best   22.20
+  dream r9 n015 <- n012 W64-b1-L6-r0.25-o0.005   ok     29.28  best   22.20
+  dream r9 n016 <- n011 W16-b1-L5-r0.25-o0.01    ok     24.33  best   22.20
+  dream r9 n017 <- n012 W16-b1-L5-r0.25-o0.005   ok     23.35  best   22.20
+  dream r9 n018 <- n012 W16-b1-L8-r0.25-o0.005   ok     25.60  best   22.20
+  dream r9 n019 <- n017 W16-b1-L6-r0.25-o0.005   ok     24.24  best   22.20
+  dream r9 n020 <- n012 W16-b1-L6-r0.25-o0.01    ok     24.84  best   22.20
+  dream r9 n021 <- n011 W16-b1-L4-r0.25-o0.01    ok     25.51  best   22.20
+  dream r9 n022 <- n003 W16-b1-L4-r0.25-o0.005   ok     22.14  best   22.14
+  dream r9 n023 <- n022 W16-b1-L4-r0.25-o0.01    ok     21.75  best   21.75
+  dream r9 n024 <- n023 W64-b1-L3-r0.25-o0.01    ok     27.32  best   21.75
+  dream r9 n025 <- n023 W16-b1-L4-r0.25-o0.005   ok     22.05  best   21.75
+  dream r9 n026 <- n025 W16-b1-L4-r0.25-o0.01    ok     23.62  best   21.75
+  dream r9 n027 <- n023 W16-b2-L4-r0.25-o0.01    ok     29.56  best   21.75
+  dream r9 n028 <- n025 W16-b2-L4-r0.25-o0.01    ok     29.39  best   21.75
+  dream r9 n029 <- n022 W16-b2-L4-r0.25-o0.01    ok     30.88  best   21.75
+  dream r9 n030 <- n023 W64-b1-L4-r0.25-o0.01    ok     36.58  best   21.75
+  dream r9 n031 <- n023 W16-b1-L4-r0.25-o0.005   ok     25.43  best   21.75
+  dream r9 n032 <- n025 W64-b1-L4-r0.5-o0.005    ok     39.28  best   21.75
+  dream r9 n033 <- n023 W16-b1-L4-r0.25-o0.03    ok     23.83  best   21.75
+  dream r9 n034 <- n022 W64-b1-L4-r0.5-o0.005    ok     39.69  best   21.75
+  dream r9 n035 <- n023 W16-b1-L4-r0.25-o0.02    ok     24.22  best   21.75
+  dream r9 n036 <- n025 W16-b2-L4-r0.25-o0.005   ok     32.77  best   21.75
+  dream r9 n037 <- n023 W16-b1-L4-r0.25-o0.005   ok     22.15  best   21.75
+  dream r9 n038 <- n037 W16-b1-L4-r0.25-o0.01    ok     24.07  best   21.75
+  dream r9 n039 <- n037 W16-b2-L4-r0.25-o0.01    ok     30.68  best   21.75
+  dream r9 n040 <- n037 W64-b1-L4-r0.5-o0.005    ok     47.42  best   21.75
+  dream r9: 40 calls, best W16-b1-L4-r0.25-o0.01 21.75 ns/op (30s)
+fixed r10 policy refine_best() root W64-b1-L2-r0.25-o0.005 24.98
+  fixed r10 n001 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n002 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.25  best   27.22
+  fixed r10 n003 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n004 <- n000 W64-b1-L2-r0.375-o0.005  full   best   27.22
+  fixed r10 n005 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n006 <- n000 W64-b1-L2-r0.375-o0.005  full   best   27.22
+  fixed r10 n007 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.80  best   27.22
+  fixed r10 n008 <- n000 W64-b1-L2-r0.375-o0.01   ok     30.45  best   27.22
+  fixed r10 n009 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n010 <- n000 W64-b1-L0-r0.5-o0.05     ok     52.73  best   27.22
+  fixed r10 n011 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n012 <- n000 W64-b2-L2-r0.25-o0.005   ok     37.04  best   27.22
+  fixed r10 n013 <- n000 W64-b1-L3-r0.25-o0.005   ok     31.48  best   27.22
+  fixed r10 n014 <- n000 W64-b1-L3-r0.25-o0.005   ok     28.75  best   27.22
+  fixed r10 n015 <- n000 W64-b2-L2-r0.25-o0.005   ok     39.02  best   27.22
+  fixed r10 n016 <- n000 W64-b1-L1-r0.25-o0.005   full   best   27.22
+  fixed r10 n017 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n018 <- n000 W64-b1-L1-r0.25-o0.005   full   best   27.22
+  fixed r10 n019 <- n000 W64-b1-L3-r0.25-o0.005   ok     29.75  best   27.22
+  fixed r10 n020 <- n000 W64-b2-L2-r0.25-o0.005   ok     38.91  best   27.22
+  fixed r10 n021 <- n000 W64-b2-L2-r0.25-o0.005   ok     40.38  best   27.22
+  fixed r10 n022 <- n000 W64-b1-L3-r0.25-o0.005   ok     27.64  best   27.22
+  fixed r10 n023 <- n000 W64-b1-L0-r0.5-o0.05     ok     56.34  best   27.22
+  fixed r10 n024 <- n000 W64-b2-L2-r0.375-o0.005  ok     42.29  best   27.22
+  fixed r10 n025 <- n000 W64-b1-L1-r0.25-o0.005   full   best   27.22
+  fixed r10 n026 <- n000 W64-b1-L1-r0.25-o0.005   full   best   27.22
+  fixed r10 n027 <- n000 W64-b1-L3-r0.25-o0.01    ok     28.23  best   27.22
+  fixed r10 n028 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n029 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n030 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n031 <- n000 W64-b1-L1-r0.25-o0.005   full   best   27.22
+  fixed r10 n032 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n033 <- n000 W64-b1-L2-r0.375-o0.005  full   best   27.22
+  fixed r10 n034 <- n000 W64-b1-L2-r0.375-o0.005  full   best   27.22
+  fixed r10 n035 <- n000 W16-b1-L2-r0.25-o0.005   full   best   27.22
+  fixed r10 n036 <- n000 W64-b1-L4-r0.25-o0.005   ok     29.20  best   27.22
+  fixed r10 n037 <- n000 W64-b1-L2-r0.25-o0.02    ok     26.48  best   26.48
+  fixed r10 n038 <- n037 W64-b2-L2-r0.5-o0.02     ok     44.70  best   26.48
+  fixed r10 n039 <- n037 W64-b1-L2-r0.25-o0.005   ok     25.57  best   25.57
+  fixed r10 n040 <- n039 W16-b1-L2-r0.25-o0.005   full   best   25.57
+  fixed r10: 40 calls, best W64-b1-L2-r0.25-o0.005 25.57 ns/op (21s)
+dream r10: 1001 candidates in 1.0s; J 0.1162 (ucb(c=0.05,kmax=inf,patience=inf,eps=0.005)) -> 0.1513 (repair(c=0.1,fp=0.3,kmax=inf,kfail=4,patience=inf,eps=0.005,dedup=True)), miss 0.23
+dream r10 policy repair(c=0.1,fp=0.3,kmax=inf,kfail=4,patience=inf,eps=0.005,dedup=True) root W16-b1-L4-r0.25-o0.01 21.75
+  dream r10 n001 <- n000 W64-b1-L3-r0.25-o0.01    ok     27.76  best   22.72
+  dream r10 n002 <- n000 W16-b1-L4-r0.25-o0.005   ok     22.73  best   22.72
+  dream r10 n003 <- n002 W16-b1-L4-r0.25-o0.01    ok     23.00  best   22.72
+  dream r10 n004 <- n002 W16-b2-L4-r0.25-o0.01    ok     31.08  best   22.72
+  dream r10 n005 <- n002 W64-b1-L4-r0.5-o0.005    ok     37.79  best   22.72
+  dream r10 n006 <- n000 W16-b2-L4-r0.25-o0.01    ok     31.44  best   22.72
+  dream r10 n007 <- n002 W16-b2-L4-r0.25-o0.005   ok     30.10  best   22.72
+  dream r10 n008 <- n000 W64-b1-L4-r0.25-o0.01    ok     29.34  best   22.72
+  dream r10 n009 <- n002 W64-b1-L4-r0.25-o0.005   ok     30.33  best   22.72
+  dream r10 n010 <- n000 W16-b1-L4-r0.25-o0.005   ok     22.63  best   22.63
+  dream r10 n011 <- n002 W16-b2-L4-r0.25-o0.005   ok     31.00  best   22.63
+  dream r10 n012 <- n002 W16-b1-L6-r0.25-o0.005   ok     23.90  best   22.63
+  dream r10 n013 <- n012 W16-b1-L5-r0.25-o0.005   ok     23.54  best   22.63
+  dream r10 n014 <- n013 W16-b1-L6-r0.25-o0.005   ok     23.91  best   22.63
+  dream r10 n015 <- n013 W16-b1-L5-r0.25-o0.01    ok     23.36  best   22.63
+  dream r10 n016 <- n015 W16-b1-L5-r0.375-o0.01   ok     25.08  best   22.63
+  dream r10 n017 <- n015 W16-b1-L4-r0.25-o0.01    ok     25.42  best   22.63
+  dream r10 n018 <- n015 W16-b1-L5-r0.25-o0.005   ok     23.74  best   22.63
+  dream r10 n019 <- n012 W16-b1-L8-r0.375-o0.005  ok     26.67  best   22.63
+  dream r10 n020 <- n016 W16-b1-L4-r0.375-o0.01   ok     25.91  best   22.63
+  dream r10 n021 <- n002 W16-b1-L5-r0.25-o0.005   ok     24.19  best   22.63
+  dream r10 n022 <- n002 W16-b1-L5-r0.25-o0.005   ok     24.20  best   22.63
+  dream r10 n023 <- n015 W16-b2-L5-r0.25-o0.01    ok     33.96  best   22.63
+  dream r10 n024 <- n002 W16-b1-L4-r0.25-o0.01    ok     23.03  best   22.63
+  dream r10 n025 <- n002 W16-b1-L4-r0.25-o0.01    ok     23.02  best   22.63
+  dream r10 n026 <- n002 W16-b1-L5-r0.25-o0.005   ok     22.41  best   22.41
+  dream r10 n027 <- n013 W16-b1-L4-r0.25-o0.01    ok     22.61  best   22.41
+  dream r10 n028 <- n015 W16-b1-L5-r0.25-o0.02    ok     23.82  best   22.41
+  dream r10 n029 <- n028 W16-b1-L5-r0.25-o0.03    ok     23.88  best   22.41
+  dream r10 n030 <- n029 W16-b1-L5-r0.25-o0.02    ok     23.89  best   22.41
+  dream r10 n031 <- n028 W16-b1-L5-r0.25-o0.005   ok     24.86  best   22.41
+  dream r10 n032 <- n029 W16-b1-L6-r0.25-o0.03    ok     25.81  best   22.41
+  dream r10 n033 <- n028 W16-b1-L6-r0.25-o0.05    ok     34.77  best   22.41
+  dream r10 n034 <- n029 W16-b1-L5-r0.25-o0.05    ok     25.58  best   22.41
+  dream r10 n035 <- n034 W16-b1-L5-r0.25-o0.03    ok     25.00  best   22.41
+  dream r10 n036 <- n012 W64-b1-L6-r0.25-o0.005   ok     28.36  best   22.41
+  dream r10 n037 <- n002 W16-b2-L5-r0.25-o0.005   ok     30.55  best   22.41
+  dream r10 n038 <- n032 W64-b1-L6-r0.25-o0.05    ok     40.43  best   22.41
+  dream r10 n039 <- n002 W16-b1-L4-r0.375-o0.005  ok     24.23  best   22.41
+  dream r10 n040 <- n039 W16-b1-L5-r0.375-o0.005  ok     24.72  best   22.41
+  dream r10: 40 calls, best W16-b1-L5-r0.25-o0.005 22.41 ns/op (29s)
+evaluator calls this session: 281
