@@ -1,0 +1,2 @@
+# Shell scripts and configs must keep LF on Windows checkouts (core.autocrlf).
+* text=auto eol=lf

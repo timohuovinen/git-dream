@@ -15,9 +15,8 @@ use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,10 +238,70 @@ impl ShOut {
     }
 }
 
+/// `sh -c command`. Commands, evaluators and external policies are POSIX
+/// shell everywhere; on Windows that is the `sh` of Git for Windows.
+pub fn sh_command(command: &str) -> Command {
+    let mut c = Command::new(sh_program());
+    c.arg("-c").arg(command);
+    c
+}
+
+#[cfg(not(windows))]
+fn sh_program() -> std::path::PathBuf {
+    "sh".into()
+}
+
+/// `$GIT_DREAM_SH`, else the `sh.exe` of the Git for Windows that runs `git`
+/// (`<Git>/mingw64/libexec/git-core` -> `<Git>/bin/sh.exe`), else `sh`.
+#[cfg(windows)]
+fn sh_program() -> std::path::PathBuf {
+    static SH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    SH.get_or_init(|| {
+        if let Some(p) = std::env::var_os("GIT_DREAM_SH") {
+            return p.into();
+        }
+        let exec = Command::new("git").arg("--exec-path").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        for dir in Path::new(&exec).ancestors().skip(1) {
+            for rel in ["bin/sh.exe", "usr/bin/sh.exe"] {
+                if dir.join(rel).is_file() {
+                    return dir.join(rel);
+                }
+            }
+        }
+        "sh".into()
+    })
+    .clone()
+}
+
+#[cfg(unix)]
+fn own_process_group(c: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    c.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn own_process_group(_: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_tree(child: &Child) {
+    let _ = Command::new("kill").arg("-KILL").arg(format!("-{}", child.id())).status();
+}
+
+#[cfg(windows)]
+fn kill_tree(child: &Child) {
+    let _ = Command::new("taskkill").args(["/F", "/T", "/PID", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_tree(_: &Child) {}
+
 /// Run `sh -c command` in its own process group; kill the whole group on timeout.
 pub fn sh(command: &str, cwd: &Path, env: &[(String, String)], timeout: f64) -> Result<ShOut> {
     let t0 = Instant::now();
-    let mut child = Command::new("sh").arg("-c").arg(command).current_dir(cwd).envs(env.iter().map(|(a, b)| (a, b))).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn()?;
+    let mut cmd = sh_command(command);
+    cmd.current_dir(cwd).envs(env.iter().map(|(a, b)| (a, b))).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    own_process_group(&mut cmd);
+    let mut child = cmd.spawn()?;
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
     let ho = std::thread::spawn(move || {
@@ -263,7 +322,7 @@ pub fn sh(command: &str, cwd: &Path, env: &[(String, String)], timeout: f64) -> 
         }
         if t0.elapsed() > deadline {
             timed_out = true;
-            let _ = Command::new("kill").arg("-KILL").arg(format!("-{}", child.id())).status();
+            kill_tree(&child);
             break child.wait()?;
         }
         std::thread::sleep(Duration::from_millis(5));
