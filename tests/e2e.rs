@@ -40,6 +40,7 @@ fn repo(example: &str, name: &str, edit: impl Fn(String) -> String) -> Repo {
     let cfg = d.join(".git-dream.toml");
     std::fs::write(&cfg, edit(std::fs::read_to_string(&cfg).unwrap())).unwrap();
     git(&d, &["init", "-q"]);
+    git(&d, &["config", "core.autocrlf", "false"]);
     git(&d, &["add", "-A"]);
     git(&d, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
     Repo(d)
@@ -155,6 +156,7 @@ done
     let sp = r.0.join("first_k.sh");
     std::fs::write(&sp, script).unwrap();
     git(&r.0, &["update-index", "--chmod=+x", "--add", "first_k.sh"]);
+    #[cfg(unix)]
     Command::new("chmod").arg("+x").arg(&sp).status().unwrap();
     let e = open(&r, None);
     e.rounds(1, true, None, None, None).unwrap();

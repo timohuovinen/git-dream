@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::rc::Rc;
 
 pub const INF: f64 = f64::INFINITY;
@@ -357,7 +357,7 @@ pub struct External {
 
 impl External {
     fn start(&mut self) -> Result<()> {
-        let mut child = Command::new("sh").arg("-c").arg(&self.command).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().with_context(|| format!("starting policy {:?}", self.command))?;
+        let mut child = crate::agents::sh_command(&self.command).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().with_context(|| format!("starting policy {:?}", self.command))?;
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         self.proc = Some((child, stdin, stdout));
