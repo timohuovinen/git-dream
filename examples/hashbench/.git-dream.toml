@@ -1,0 +1,35 @@
+# The hashbench case study (docs/case-study-hashbench.md) expressed as a
+# git-dream config. Copy this file and eval.sh into a hashbench checkout that
+# has src/bin/dream-eval.rs (research/hashbench/).
+run = "main"
+
+[agent]
+kind = "space"
+file = ".dream/params.json"
+start = { W = 16, b = 1, L = 0, r = 0.5, o = 0.05 }    # SwissTable-style, no funnel levels
+
+[agent.knobs]
+W = [16, 64]                                   # SIMD group width
+b = [1, 2]                                     # groups per bucket
+L = [0, 1, 2, 3, 4, 5, 6, 8]                   # funnel levels
+r = [0.25, 0.375, 0.5, 0.625, 0.75]            # level size ratio
+o = [0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12]  # overflow fraction
+
+[evaluate]
+command = "sh eval.sh"
+goal = "min"                                   # ns/op
+timeout = 300
+remeasure_root = true                          # machine speed drifts between rounds
+confirm_top = 3                                # avoid promoting a lucky measurement
+
+[explore]
+budget = 40
+
+[dream]
+lam = 0.02
+candidates = 1000
+mode = "cache"
+normalize = "root"                             # cached scores relative to each round's root
+
+[policies]
+initial = { family = "refine_best" }

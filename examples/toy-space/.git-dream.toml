@@ -1,0 +1,26 @@
+# Toy example: tune four knobs of a made-up kernel (see bench.sh).
+run = "main"
+
+[agent]
+kind = "space"
+file = ".dream/params.json"
+start = { threads = 1, block = 16, unroll = 1, cache_kb = 32 }
+
+[agent.knobs]
+threads = [1, 2, 3, 4, 6, 8, 12, 16]
+block = [8, 16, 32, 64, 128, 256, 512]
+unroll = [1, 2, 4, 8, 16]
+cache_kb = [16, 32, 64, 128, 256, 512]
+
+[evaluate]
+command = "./bench.sh"
+goal = "min"
+timeout = 30
+
+[explore]
+budget = 25
+
+[dream]
+lam = 0.02
+candidates = 200
+mode = "cache"

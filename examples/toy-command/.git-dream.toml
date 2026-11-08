@@ -1,0 +1,21 @@
+# Toy command-agent example: agent.sh randomly edits solver.awk; every attempt
+# is a real code commit. Swap `command` for an LLM agent to explore real code.
+run = "main"
+
+[agent]
+kind = "command"
+command = "./agent.sh"
+timeout = 60
+
+[evaluate]
+command = "./bench.sh"
+goal = "min"
+timeout = 60
+
+[explore]
+budget = 12
+
+[dream]
+lam = 0.02
+candidates = 200
+mode = "strict"     # stochastic agent: only recorded edges can be replayed

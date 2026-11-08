@@ -1,0 +1,20 @@
+[package]
+name = "git-dream"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Dream-RSI on git: improve how a search explores a repository, using git commits as the experiment memory"
+repository = "https://github.com/timohuovinen/git-dream"
+readme = "README.md"
+keywords = ["git", "search", "optimization", "autotuning", "agents"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = { version = "0.9", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = 3
