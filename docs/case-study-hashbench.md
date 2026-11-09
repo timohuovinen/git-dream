@@ -1,6 +1,6 @@
 # Case study: Dream-RSI on git for high-load hash tables
 
-> This is the experiment `git-dream` grew out of. It was run with the research prototype in [`research/hashbench/`](../research/hashbench/), inside a private hash-table benchmark crate (`hashbench`). The `git-dream` tool ([`src/`](../src/), Rust) is that prototype rewritten and made repository-agnostic, and [`examples/hashbench/`](../examples/hashbench/) expresses the same task as a `.git-dream.toml`. Paths and commands below refer to the original setup.
+> This is the experiment `git-dream` grew out of. It was run with the research prototype in [`research/hashbench/`](../research/hashbench/), inside a private hash-table benchmark crate (`hashbench`). The `git-dream` tool ([`src/`](../src/), Rust) is that prototype rewritten and made repository-agnostic, and [`examples/hashbench/`](../examples/hashbench/) expresses the same task as a `.git-dream.toml`. Paths and commands below refer to the original setup. The current Rust implementation adds a held-out deployment gate, exploration floors, and fresh-only confirmation; those changes were not used to obtain the archived results. See the [current validation protocol](validation.md) and [configuration changes](compatibility.md).
 
 This is a working, minimal re-creation of **Dream-RSI** ("Recursive Self-Improvement through Evolving Worlds", Google / Google DeepMind et al., 2026, [dream-rsi.com](https://www.dream-rsi.com/)). It uses **git as the only experimental memory**. The loop is applied to a real optimisation task: finding the fastest fixed-capacity open-addressing hash-table design at 95–98% load. The hash tables come from `hashbench/`.
 
@@ -10,7 +10,7 @@ Code (original layout): a worktree `dream-rsi/` on branch `dream/main` of the `h
 
 - **The whole loop runs on plain git.** Explore, remember, dream and improve all work with ordinary commits, commit trailers, git notes and refs. There's no database and no model training. 722 real evaluations live in the repo: 732 commits under `refs/dream/*`, which is every attempt plus each round's root, including 10 roots whose scores were carried over rather than re-measured. A discovery tree is rebuilt from git alone before every dream step.
 - **Dreaming is cheap.** Replaying 1,000 candidate exploration policies over the whole recorded history takes 0.1–1 s, with zero new evaluations.
-- **Dreaming with the first policy families changed nothing.** In rounds 2–6 the dream re-selected the hand-written π0 every time: nothing beat it on replay. I diagnosed why from the recorded trees, which is the paper's "policy-development agent" step done by Claude. Then I wrote a v2 policy family (`repair`, mainly its *dedup* rule).
+- **Dreaming with the first policy families changed nothing.** In rounds 2–6 the dream re-selected the hand-written π0 every time: nothing beat it on replay. Inspection of the recorded trees motivated a v2 policy family (`repair`, mainly its *dedup* rule), corresponding to the paper's policy-development step.
 - **With v2, dreaming helped measurably.** Over 100 synthetic replicates in an oracle-backed world, the remaining gap to the true optimum after 8 rounds fell from **14.6% (fixed π0) to 8.4% (Dream-RSI)**. The paired difference was +0.061 ± 0.022, using **26% fewer evaluations** (238 vs 320).
 - **Live, the dream arm reached the true optimum** (1.000×) after 273 evaluations, with rounds of 16–17 calls. The fixed arm was still 1.27× off after 400. The two arms had already diverged by luck before the policies differed, so this live run is anecdotal (n=1).
 - **Honest limits:**
@@ -42,7 +42,7 @@ The mapping used here:
 | Exploration path | branch `dream/<arm>/r<NN>-best`; `git log` on it shows the lineage |
 | Exploration policy (versioned code) | branch `dream/<arm>/policy`: one commit per round with `policy.json` + snapshot of `policies.py`, tags `dream/<arm>/policy-r<NN>` |
 | Dreaming (offline replay) | [sim.py](../research/hashbench/sim.py): `ReplayWorld`, `replay`, `dream` |
-| Policy-development agent | (a) automatic: random search over parametric policy families; (b) Claude reading the recorded trees and writing a new family |
+| Policy-development agent | (a) automatic: random search over parametric policy families; (b) inspection of recorded trees followed by development of a new family |
 
 An attempt commit, exactly as stored:
 
@@ -110,7 +110,7 @@ The score is the mean over α of (insert + hit + miss)/3 in ns/op. Every phase i
 2. Off the recorded path:
    - **strict** mode: nothing else is known. This is all you can assume with a stochastic LLM agent, and it matches the paper's "a policy can only be dreamt where history actually went".
    - **cache** mode: use any recorded measurement of design *d* from anywhere in the history. This is valid here only because the agent is deterministic and a design's score doesn't depend on how it was reached. It is **drift-corrected**: scores are stored relative to the root of the tree that measured them, then rescaled to the root of the tree being replayed.
-3. Anything else is a **MISS**. The project page doesn't say how unrecorded nodes are handled, so I chose a pessimistic rule. The call is still charged and the attempt counts as a failure, so a dreamt policy can never profit from leaving explored territory.
+3. Anything else is a **MISS**. The project page doesn't say how unrecorded nodes are handled, so I chose a pessimistic rule. The call is still charged and the attempt counts as a failure. This is a pessimistic surrogate for an unknown outcome; it can favor recorded paths and early stopping, so it does not remove selection bias.
 
 **Objective.** For each recorded tree, the policy starts at that tree's root with that round's budget (40). The objective is
 
@@ -129,7 +129,7 @@ All policies share one interface: `select(tree) -> node_id | None`. They live in
   - `ucb`: quality + c·exploration bonus, with `kmax` continuations per node and patience/eps stopping.
   - `beam`: top-m attempts, least-continued first.
   - `softmax`: sampling ∝ exp(−Δ/T).
-- **v2 family `repair`** was written by Claude as the policy-development agent after studying the recorded trees (commit `da1e0ab`). It makes two changes:
+- **v2 family `repair`** was developed after inspection of the recorded trees (commit `da1e0ab`). It makes two changes:
   - **Repair failures.** It may continue *failed* attempts, valued at their nearest valid ancestor's score × (1+fp), at most `kfail` times. 45% of live calls were designs that overflow, and a failed L1 design is often one step from a working L2.
   - **Dedup.** All copies of a design act as one node: continue the copy that has explored furthest, and value the design by the mean of its measurements. The agent's k-th proposal depends on (design, k), so continuing a fresh copy of an already-explored design just replays old proposals. Round 1 had only 11 distinct designs among 41 attempts.
 
@@ -151,7 +151,7 @@ Round 1 is shared by both arms and is identical by construction. Budget is 40 ca
   This is the same limitation the page states (dreaming is exact only where history went), observed in practice.
 - With the same π0, the two arms diverged by measurement noise. In r5 the "dream" arm stumbled into `W16-L3` (oracle 20.43). The fixed arm stayed in the `W64-L2` basin (24.68).
 
-### 5.2 Policy-development step (Claude as the meta-agent)
+### 5.2 Policy-development step
 
 I read the recorded trees: the duplicate proposals, the 45% overflow failures and the late breakthrough. From that I wrote the `repair` family. An exhaustive replay sweep of its 36,000 parameter settings over the 6 recorded trees gave:
 
@@ -226,10 +226,10 @@ Cross-checks from the parallel hashbench session (branch `bench/main`), and what
 ## 7. Lessons and limitations
 
 1. **Git really is enough as memory.** Commits, trailers, notes and refs give you an append-only, inspectable and diffable discovery DAG, and `git log` shows the lineage for free. One caveat: `git gc --prune` must not remove `refs/dream/*`. Those are ordinary refs, so normal gc keeps them.
-2. **Dreaming is bounded by coverage.** Exact replay exists only where history went. With the paper-faithful strict rule, alternatives are mostly MISSes, and in this task that made the dream *worse*. The cross-tree cache is what made it useful, and it is valid only because the agent here is deterministic. With an LLM agent you'd need a similarity-based or learned outcome model, which is something the paper explicitly avoids.
-3. **The policy space matters more than the search over it.** 1,000 random v1 candidates per round never beat π0. One human/LLM-written family, `repair` with dedup, based on reading the trees, did. This matches the paper's framing: the policy-development agent writes *code*, it doesn't just tune knobs.
-4. **Noise and drift are first-class problems.** Measurement noise was ~5–9%. The machine slowed by about 23% mid-session when another benchmark started sharing DRAM/L3. Without the three corrections (fresh root measurements, drift-normalised cache, a single uniform oracle sweep), scores from different times aren't comparable. Incumbents chosen by recorded score suffer the winner's curse (§5.3 r10). Re-measuring the top-k before promoting an incumbent would be the next fix.
-5. **Replay is optimistic about its own pick.** The replay J of the selected policy dropped sharply once its own round entered history. Holding out the most recent tree, or penalising the miss rate, would reduce this.
+2. **Dreaming is bounded by coverage.** Exact replay exists only where history went. With the paper-faithful strict rule, alternatives are mostly MISSes, and in this task that made the dream *worse*. The cross-tree cache is what made it useful, and it is valid only because the agent here is deterministic. With an LLM agent, replay cannot establish outcomes for unobserved changes. Fresh prospective evaluations are needed to test policy improvements; a learned outcome model would introduce additional assumptions.
+3. **The policy space matters more than the search over it.** 1,000 random v1 candidates per round never beat π0. One additional family, `repair` with dedup, based on reading the trees, did. This matches the paper's framing: the policy-development agent writes *code*, it doesn't just tune knobs.
+4. **Noise and drift are first-class problems.** Measurement noise was ~5–9%. The machine slowed by about 23% mid-session when another benchmark started sharing DRAM/L3. Without the three corrections (fresh root measurements, drift-normalised cache, a single uniform oracle sweep), scores from different times aren't comparable. Incumbents chosen by recorded score suffer the winner's curse (§5.3 r10). The current Rust tool remeasures finalists and the incumbent root using fresh repetitions, rejecting candidates with failed confirmations. That protection was absent from these archived runs.
+5. **Replay is optimistic about its own pick.** The replay J of the selected policy dropped sharply once its own round entered history. The current Rust tool reserves recent rounds for a deployment check and rejects a candidate with a higher held-out miss rate. These checks diagnose some overfitting; they do not eliminate behavior-policy selection or make repeatedly consulted rounds an untouched test set.
 6. **Scope.** The discovery agent is a mutation operator, not an LLM. The design space is a 982-point grid, so the oracle can be measured exhaustively, which is what made validation possible. The paper's tasks are open-ended code. The machinery here (git memory, replay, selection, versioned policies) carries over unchanged. Only `agent` and `dream-eval` would be replaced: by an LLM producing a code diff per attempt, and by a build-and-benchmark of that commit.
 
 ## 8. Reproducing
