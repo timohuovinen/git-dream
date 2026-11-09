@@ -42,6 +42,7 @@ lam = 0.02                        # cost of spending the whole budget, in units 
 candidates = 300                  # sampled policies per dream
 mode = "cache"                    # cache: reuse any recorded measurement of a design; strict: recorded edges only
 normalize = "none"                # "root": rescale cached scores by each tree's root (machine drift)
+history = "run"                   # "all": dream over, and show agents, every run in this repository
 
 [policies]
 initial = { family = "refine_best" }
@@ -62,7 +63,7 @@ run = "main"
 [agent]
 kind = "command"                  # any program that edits the checkout, e.g. an LLM coding agent
 # Runs in a scratch worktree at the parent attempt. Env: $DREAM_PROMPT (prompt below + where
-# the attempt is + how to work), $DREAM_CONTEXT (file: every attempt of every round so far,
+# the attempt is + how to work), $DREAM_CONTEXT (file: every attempt so far, see [dream] history,
 # with write-ups, results and failure output), $DREAM_MESSAGE_FILE (write the proposal there).
 command = 'claude -p "$DREAM_PROMPT" --permission-mode acceptEdits'
 prompt = """
@@ -84,6 +85,7 @@ budget = 6                        # agent calls are expensive: keep rounds small
 lam = 0.05
 candidates = 300
 mode = "strict"                   # stochastic agent: only recorded edges can be replayed
+history = "run"                   # "all": dream over, and show agents, every run in this repository
 
 [policies]
 initial = { family = "refine_best" }

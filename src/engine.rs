@@ -557,8 +557,10 @@ fn run_agent(e: &Engine, c: &CommandAgent, t: &Tree, parent: usize, k: usize, pa
     std::fs::create_dir_all(&dir)?;
     let ctx = dir.join(HISTORY_FILE);
     let msgf = dir.join(MESSAGE_FILE);
-    // Every round of this run so far: earlier ones from git, this one in progress.
-    let earlier: Vec<Tree> = e.mem.history(&e.run)?.into_iter().filter(|h| h.round < t.round).collect();
+    // The same history dreaming replays (`[dream] history`), read from git, plus
+    // this round in progress: other runs first, then this run's earlier rounds.
+    let mut earlier: Vec<Tree> = e.history()?.into_iter().filter(|h| h.run != e.run || h.round < t.round).collect();
+    earlier.sort_by_key(|h| h.run == e.run);
     let trees: Vec<&Tree> = earlier.iter().chain([t]).collect();
     let failed: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != OK && n.status != NOOP).map(|n| n.sha.as_str()).collect();
     let notes = e.mem.notes_of(&failed)?;
@@ -625,25 +627,40 @@ pub fn agent_context(t: &Tree, parent: usize, k: usize) -> String {
 }
 
 /// The complete search history handed to a command agent (`$DREAM_CONTEXT`):
-/// every attempt of every round so far (`trees`, the last one in progress),
+/// every attempt of every round so far (`trees`, the last one in progress;
+/// with `[dream] history = "all"` also the other runs' rounds, listed first),
 /// with its write-up, its measured result and, for failures, the evaluator's
 /// output from the attempt's note. Raw evidence, not a summary: in Dream-RSI
 /// (§5.1, Fig. 5), distilled "directional insights" made the search worse.
 pub fn history_context(trees: &[&Tree], parent: usize, k: usize, notes: &HashMap<String, Value>) -> String {
     let Some(cur) = trees.last() else { return String::new() };
     let better = if cur.goal == Goal::Min { "lower" } else { "higher" };
+    let mut others: Vec<&str> = trees.iter().map(|t| t.run.as_str()).filter(|r| *r != cur.run).collect();
+    others.dedup();
+    let multi = !others.is_empty();
+    // Attempt labels: "r02" within one run, "<run> r02" once other runs are included.
+    let label = |t: &Tree| if multi { format!("{} r{:02}", t.run, t.round) } else { format!("r{:02}", t.round) };
     let mut s = format!(
-        "# Search history: run {}\n\nScore: {better} is better; failed attempts have no score. You are continuing r{:02} n{:03} (continuation #{}).\n\n\
+        "# Search history: run {}\n\nScore: {better} is better; failed attempts have no score. You are continuing {} n{:03} (continuation #{}).\n\n\
          Every attempt is a git commit. `git show <commit>` shows what it changed relative to the attempt it continued; `git diff <a> <b>` compares two attempts. \
          The write-ups are the agents' own words, written before evaluation. Status, score and evaluator output are measured.\n",
         cur.run,
-        cur.round,
+        label(cur),
         parent,
         k + 1
     );
+    if multi {
+        s += &format!(
+            "\nThis history also holds the other run{} {} in this repository, listed first. Runs search separately and may have started from different code: \
+             compare scores within a run, and use `git diff` to see how another run's code differs from yours.\n",
+            if others.len() == 1 { "" } else { "s" },
+            others.iter().map(|r| format!("`{r}`")).collect::<Vec<_>>().join(", ")
+        );
+    }
     for t in trees {
         let best = t.best().map_or(String::new(), |b| format!(", best n{:03} {}", b.id, fs(b.score)));
-        s += &format!("\n## Round {} ({} attempt{}{best})\n", t.round, t.calls(), if t.calls() == 1 { "" } else { "s" });
+        let run = if multi { format!("Run {}, round", t.run) } else { "Round".into() };
+        s += &format!("\n## {run} {} ({} attempt{}{best})\n", t.round, t.calls(), if t.calls() == 1 { "" } else { "s" });
         for n in &t.nodes {
             let note = notes.get(&n.sha);
             let result = match n.status.as_str() {
@@ -656,8 +673,8 @@ pub fn history_context(trees: &[&Tree], parent: usize, k: usize, notes: &HashMap
                 },
             };
             let from = n.parent.map_or("root".to_string(), |p| format!("continues n{p:03}"));
-            let here = if t.round == cur.round && n.id == parent { " · **you are continuing this attempt**" } else { "" };
-            s += &format!("\n### r{:02} n{:03} · {from} · {result} · {}{here}\n", t.round, n.id, &n.sha[..n.sha.len().min(10)]);
+            let here = if t.run == cur.run && t.round == cur.round && n.id == parent { " · **you are continuing this attempt**" } else { "" };
+            s += &format!("\n### {} n{:03} · {from} · {result} · {}{here}\n", label(t), n.id, &n.sha[..n.sha.len().min(10)]);
             let w = n.change.trim();
             if !w.is_empty() {
                 s += "\n";

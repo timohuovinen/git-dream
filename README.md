@@ -85,7 +85,7 @@ The command runs in a scratch worktree checked out at the parent attempt. Whatev
 The command receives:
 
 - `$DREAM_PROMPT`: your prompt, where the attempt sits (the path so far, what has already been tried from this attempt, the round's best), and how to work;
-- `$DREAM_CONTEXT`: the whole search history as a file: every attempt of every round of the run so far, with its write-up, its measured result and, for failures, the evaluator's output;
+- `$DREAM_CONTEXT`: the whole search history as a file: every attempt of every round of the run so far (with `[dream] history = "all"`, of every run in the repository), with its write-up, its measured result and, for failures, the evaluator's output;
 - `$DREAM_MESSAGE_FILE`: a file to write the proposal into: a one-line summary (the commit subject), a blank line, then the idea, the evidence from the history and why it isn't a repeat. It's kept in full in the commit message.
 
 Both files are in `.dream-agent/` inside the worktree, so a sandboxed agent can reach them. The directory is removed before the attempt is committed.
@@ -157,7 +157,9 @@ The trees are rebuilt from commit trailers before every dream, so the repository
 | `git dream push` / `fetch [REMOTE]` | share dream refs |
 | `git dream clean --run NAME --yes` | delete a run |
 
-All commands take `--run NAME` and `--config FILE`. Runs are independent, e.g. `--run baseline --no-dream` against `--run dream`.
+All commands take `--run NAME` and `--config FILE`. Runs are independent by default, e.g. `--run baseline --no-dream` against `--run dream`.
+
+A run is one discovery process, the paper's history H: what dreaming replays and what each agent reads is that run's rounds. That keeps a comparison fair, since a baseline that reads the other arm's attempts is no longer a baseline. To pool knowledge instead, set `[dream] history = "all"`. Every run's recorded rounds then feed both dreaming and the agents' history file, with each attempt labelled by its run. It's one setting because the paper has one history. Nothing is copied between runs: the history is read from the runs' refs, and `git show` works across them.
 
 ## Policies
 
