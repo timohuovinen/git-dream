@@ -84,9 +84,13 @@ The command runs in a scratch worktree checked out at the parent attempt. Whatev
 
 The command receives:
 
-- `$DREAM_PROMPT`: your prompt plus search context (the path so far, and what has already been tried from this attempt);
-- `$DREAM_CONTEXT`: the same context as a file;
-- `$DREAM_MESSAGE_FILE`: a file to write a one-line description of the change into.
+- `$DREAM_PROMPT`: your prompt, where the attempt sits (the path so far, what has already been tried from this attempt, the round's best), and how to work;
+- `$DREAM_CONTEXT`: the whole search history as a file: every attempt of every round of the run so far, with its write-up, its measured result and, for failures, the evaluator's output;
+- `$DREAM_MESSAGE_FILE`: a file to write the proposal into: a one-line summary (the commit subject), a blank line, then the idea, the evidence from the history and why it isn't a repeat. It's kept in full in the commit message.
+
+Both files are in `.dream-agent/` inside the worktree, so a sandboxed agent can reach them. The directory is removed before the attempt is committed.
+
+This follows the exploration procedure of Dream-RSI (appendix B.1 of the paper, see [papers/](papers/)). Branches keep each attempt's code apart, and knowledge is shared because every attempt reads the *raw* history of all branches and rounds. There's no distilled "lessons" file: the paper found that injecting summarised directional insights into the prompt made the search worse (§5.1, Fig. 5). For the same reason, nothing records *why* an attempt failed. The commit records how it failed (`Dream-Failure: exit 3`, `timeout`, …), the note holds the evaluator's output, and each agent is told to check the failed code (`git show`) before deciding whether the idea or its implementation was at fault.
 
 ```toml
 [agent]
@@ -122,8 +126,9 @@ Ignored build outputs (e.g. `target/`) survive between attempts in the scratch w
 |---|---|
 | attempt | commit: its tree is the attempt's code / parameters |
 | parent attempt | parent commit (a round's root has the previous round's promoted attempt as parent) |
-| outcome | commit trailers `Dream-Score`, `Dream-Status`, `Dream-Design`, `Dream-Policy`, … |
-| full evaluator output | git notes, `refs/notes/dream` |
+| agent's write-up of the attempt | commit message (subject = summary, body = the rest) |
+| outcome | commit trailers `Dream-Score`, `Dream-Status`, `Dream-Failure`, `Dream-Design`, `Dream-Policy`, … |
+| evaluator output | git notes, `refs/notes/dream`: exit, metrics, first 20 + last 40 lines of stdout and stderr |
 | discovery tree | hidden refs `refs/dream/<run>/rNN/nNNN` |
 | start of a run | `refs/dream/<run>/base` |
 | best attempt | branch `dream/<run>/best` (per round: `refs/dream/<run>/rNN/best`) |

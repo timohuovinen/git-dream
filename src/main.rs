@@ -3,7 +3,7 @@
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use git_dream::engine::{fs, short, Engine, CONFIG_NAME};
+use git_dream::engine::{fs, short, summary, Engine, CONFIG_NAME};
 use git_dream::memory::{check_run, Memory, REFSPECS};
 use git_dream::policies::{Param, Policy, INF};
 use git_dream::sim::Mode;
@@ -61,9 +61,9 @@ run = "main"
 
 [agent]
 kind = "command"                  # any program that edits the checkout, e.g. an LLM coding agent
-# Runs in a scratch worktree at the parent attempt. Env: $DREAM_PROMPT (prompt below + search
-# context: path so far, siblings already tried), $DREAM_CONTEXT (same, as a file),
-# $DREAM_MESSAGE_FILE (write a one-line summary of the change there).
+# Runs in a scratch worktree at the parent attempt. Env: $DREAM_PROMPT (prompt below + where
+# the attempt is + how to work), $DREAM_CONTEXT (file: every attempt of every round so far,
+# with write-ups, results and failure output), $DREAM_MESSAGE_FILE (write the proposal there).
 command = 'claude -p "$DREAM_PROMPT" --permission-mode acceptEdits'
 prompt = """
 Make `cargo bench` faster. Keep `cargo test` passing. Make one focused change.
@@ -326,7 +326,7 @@ fn real_main() -> Result<()> {
             fn rec(t: &git_dream::tree::Tree, id: usize, depth: usize, promoted: &str) {
                 let n = &t.nodes[id];
                 let mark = if n.sha == promoted { "  <- promoted" } else { "" };
-                println!("{}n{:03} {:5} {:>10} {}  {}{mark}", "  ".repeat(depth), n.id, n.status, fs(n.score), &n.sha[..9], short(&n.change, 60));
+                println!("{}n{:03} {:5} {:>10} {}  {}{mark}", "  ".repeat(depth), n.id, n.status, fs(n.score), &n.sha[..9], short(summary(&n.change), 60));
                 for c in t.children(id) {
                     rec(t, c.id, depth + 1, promoted);
                 }

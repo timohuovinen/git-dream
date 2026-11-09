@@ -10,7 +10,7 @@
 //! refs/heads/dream/<run>/best        branch -> latest promoted attempt (check it out / merge it)
 //! refs/heads/dream/<run>/policy      branch: one commit per round with the policy it used
 //! refs/tags/dream/<run>/policy-rNN   tag of each policy version
-//! refs/notes/dream                   full evaluator output per attempt (git notes)
+//! refs/notes/dream                   evaluator output per attempt (git notes)
 //! ```
 //!
 //! An attempt commit's parent is the attempt it continued; a round's root commit
@@ -19,7 +19,7 @@
 //! (Dream-Score, Dream-Status, Dream-Design, ...), so `git log` alone rebuilds
 //! every tree.
 
-use crate::tree::{Goal, Node, Tree};
+use crate::tree::{Goal, Node, Tree, NOOP, OK};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -148,6 +148,21 @@ impl Memory {
         self.git(&["notes", "--ref=dream", "show", sha]).ok().and_then(|s| serde_json::from_str(&s).ok())
     }
 
+    /// The notes of many commits with one git call (commits without a note are left out).
+    pub fn notes_of(&self, shas: &[&str]) -> Result<HashMap<String, Value>> {
+        if shas.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let log = self.git_in(&["log", "--no-walk=unsorted", "--stdin", "--notes=dream", "--format=%H%x1f%N%x1e"], &(shas.join("\n") + "\n"))?;
+        Ok(log
+            .split('\x1e')
+            .filter_map(|rec| {
+                let (sha, note) = rec.trim().split_once('\x1f')?;
+                Some((sha.to_string(), serde_json::from_str(note.trim()).ok()?))
+            })
+            .collect())
+    }
+
     pub fn set_ref(&self, r: &str, sha: &str) -> Result<()> {
         self.git(&["update-ref", r, sha])?;
         Ok(())
@@ -208,7 +223,7 @@ impl Memory {
             body.push(change.to_string());
         }
         let opt = |o: Option<usize>| o.map_or(String::new(), |x| x.to_string());
-        let trailers = [
+        let mut trailers = vec![
             ("Run", t.run.clone()),
             ("Round", t.round.to_string()),
             ("Node", n.id.to_string()),
@@ -221,6 +236,12 @@ impl Memory {
             ("Status", n.status.clone()),
             ("Score", fmt_score(n.score)),
         ];
+        // How the evaluation failed (measured, not a diagnosis: the evidence is in the note).
+        if n.status != OK && n.status != NOOP {
+            if let Some(f) = note.and_then(crate::agents::failure) {
+                trailers.push(("Failure", f));
+            }
+        }
         let tr: Vec<String> = trailers.iter().map(|(k, v)| format!("Dream-{k}: {v}")).collect();
         let msg = format!("{subject}\n\n{}\n\n{}\n", body.join("\n"), tr.join("\n"));
         let sha = self.commit(tree, Some(parent_sha), &msg)?;
@@ -250,6 +271,15 @@ impl Memory {
             let tr: HashMap<String, String> = body.lines().filter_map(|l| l.strip_prefix("Dream-")?.split_once(':')).map(|(k, v)| (k.to_string(), v.trim().to_string())).collect();
             let get = |k: &str| tr.get(k).cloned().ok_or_else(|| anyhow!("commit {sha} lacks Dream-{k}"));
             let subject = body.lines().next().unwrap_or("");
+            // A multi-line change sits between the design/result paragraph and the trailers.
+            let paras: Vec<&str> = body.split("\n\n").collect();
+            let change = if paras.len() > 3 {
+                paras[2..paras.len() - 1].join("\n\n")
+            } else {
+                let s = subject.split_once("): ").map_or("", |x| x.1);
+                let root = tr.get("Parent-Node").is_none_or(|p| p.is_empty());
+                if root { s.strip_prefix("root ").unwrap_or(s) } else { s }.to_string()
+            };
             let num = |k: &str| -> Result<Option<usize>> { Ok(get(k).ok().filter(|s| !s.is_empty()).map(|s| s.parse()).transpose()?) };
             let score = get("Score")?;
             let mut n = Node::new(
@@ -259,7 +289,7 @@ impl Memory {
                 get("Design")?,
                 if score == "null" { None } else { Some(score.parse()?) },
                 &get("Status")?,
-                subject.split_once("): ").map_or("", |x| x.1),
+                change,
             );
             n.sha = sha.trim().to_string();
             nodes.push(n);

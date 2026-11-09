@@ -330,9 +330,46 @@ pub fn sh(command: &str, cwd: &Path, env: &[(String, String)], timeout: f64) -> 
     Ok(ShOut { exit: status.code(), timed_out, seconds: t0.elapsed().as_secs_f64(), stdout: ho.join().unwrap_or_default(), stderr: he.join().unwrap_or_default() })
 }
 
-pub fn tail(s: &str, n: usize) -> String {
-    let lines: Vec<&str> = s.lines().collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
+/// The first `head` and last `tail` lines of `s`, each cut to 400 characters.
+/// Keeping both ends matters: a compiler reports the error first, and the end
+/// of the output is often just "aborting" or a summary.
+pub fn excerpt(s: &str, head: usize, tail: usize) -> String {
+    let cut = |l: &str| if l.chars().count() > 400 { l.chars().take(399).collect::<String>() + "…" } else { l.to_string() };
+    let lines: Vec<&str> = s.trim_end().lines().collect();
+    if lines.len() <= head + tail {
+        return lines.iter().map(|l| cut(l)).collect::<Vec<_>>().join("\n");
+    }
+    let mut v: Vec<String> = lines[..head].iter().map(|l| cut(l)).collect();
+    v.push(format!("[… {} lines omitted …]", lines.len() - head - tail));
+    v.extend(lines[lines.len() - tail..].iter().map(|l| cut(l)));
+    v.join("\n")
+}
+
+/// Why a failed evaluation failed, as far as the evaluator's exit tells:
+/// "timeout", "exit 2", "killed by a signal", "no score" or "reported <status>".
+/// None when the note holds no evaluator run (e.g. a reused result).
+pub fn failure(note: &Value) -> Option<String> {
+    match note.get("exit")? {
+        Value::String(s) => Some(s.clone()),
+        Value::Null => Some("killed by a signal".into()),
+        Value::Number(n) if n.as_i64() != Some(0) => Some(format!("exit {n}")),
+        _ => match note.get("status").and_then(Value::as_str) {
+            Some(s) if s != crate::tree::OK && s != crate::tree::FAIL => Some(format!("reported {s}")),
+            _ => Some("no score".into()),
+        },
+    }
+}
+
+/// The evaluator's stderr and stdout from a note (older notes: `*_tail`).
+pub fn note_output(note: &Value) -> String {
+    let get = |k: &str| note.get(k).or_else(|| note.get(format!("{k}_tail"))).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let (err, out) = (get("stderr"), get("stdout"));
+    match (err.is_empty(), out.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("stderr:\n{err}"),
+        (true, false) => format!("stdout:\n{out}"),
+        (false, false) => format!("stderr:\n{err}\n\nstdout:\n{out}"),
+    }
 }
 
 /// The last non-empty stdout line: a number, or a JSON object with "score"
@@ -380,7 +417,7 @@ impl Evaluator {
         let note = json!({
             "score": score, "status": status, "metrics": metrics.map(Value::Object).unwrap_or(json!({})),
             "exit": r.exit_json(), "seconds": (r.seconds * 1000.0).round() / 1000.0,
-            "stdout_tail": tail(&r.stdout, 40), "stderr_tail": tail(&r.stderr, 40),
+            "stdout": excerpt(&r.stdout, 20, 40), "stderr": excerpt(&r.stderr, 20, 40),
         });
         Ok(EvalResult { score, status, note })
     }
@@ -414,6 +451,27 @@ mod tests {
         assert_eq!(parse_score("{\"score\": 2, \"x\": 1}").0, Some(2.0));
         assert_eq!(parse_score("not a number").0, None);
         assert_eq!(parse_score("").0, None);
+    }
+
+    #[test]
+    fn excerpts_keep_both_ends() {
+        let s: String = (1..=100).map(|i| format!("line {i}\n")).collect();
+        let e = excerpt(&s, 2, 3);
+        assert_eq!(e, "line 1\nline 2\n[… 95 lines omitted …]\nline 98\nline 99\nline 100");
+        assert_eq!(excerpt("a\nb\n", 2, 3), "a\nb");
+        assert_eq!(excerpt(&"x".repeat(1000), 1, 1).chars().count(), 400);
+    }
+
+    #[test]
+    fn failure_kinds() {
+        let f = |v: Value| failure(&v);
+        assert_eq!(f(json!({"exit": "timeout", "status": "fail"})).as_deref(), Some("timeout"));
+        assert_eq!(f(json!({"exit": 2, "status": "fail"})).as_deref(), Some("exit 2"));
+        assert_eq!(f(json!({"exit": null, "status": "fail"})).as_deref(), Some("killed by a signal"));
+        assert_eq!(f(json!({"exit": 0, "status": "ok"})).as_deref(), Some("no score"));
+        assert_eq!(f(json!({"exit": 0, "status": "full"})).as_deref(), Some("reported full"));
+        assert_eq!(f(json!({"reused": "abc", "status": "fail"})), None);
+        assert_eq!(note_output(&json!({"stderr_tail": "old", "stdout": ""})), "stderr:\nold");
     }
 
     #[test]
