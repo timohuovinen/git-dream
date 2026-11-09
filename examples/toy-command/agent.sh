@@ -1,7 +1,7 @@
 #!/bin/sh
 # A stand-in for an LLM coding agent: one truly random edit (seeded from
 # /dev/urandom, like an LLM's sampling) to a constant in solver.awk, described
-# in $DREAM_MESSAGE_FILE. It receives the same $DREAM_CONTEXT an LLM would.
+# in $DREAM_MESSAGE_FILE. It ignores the history in $DREAM_CONTEXT that an LLM would read.
 set -e
 seed=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')
 awk -v seed="$seed" -v msg="${DREAM_MESSAGE_FILE:-/dev/null}" '

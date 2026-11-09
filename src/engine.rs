@@ -1,7 +1,7 @@
 //! Configuration, the live world (real agent + evaluator + git commits) and the
 //! round loop: `[dream ->] explore -> promote`, repeated.
 
-use crate::agents::{sh, tail, Agent, CommandAgent, EvalResult, Evaluator, SpaceAgent};
+use crate::agents::{excerpt, failure, note_output, sh, Agent, CommandAgent, EvalResult, Evaluator, SpaceAgent};
 use crate::memory::{check_run, Memory};
 use crate::policies::{Param, Policy, Registry};
 use crate::rng::hash;
@@ -397,8 +397,7 @@ impl Engine {
         t.set_root(root.clone());
         root.sha = self.mem.commit_attempt(&t, &root, &tree, &parent, Some(&res.note))?;
         if root.score.is_none() {
-            let n = &res.note;
-            bail!("the root of round {round} did not evaluate ({}):\n{}{}", root.status, n["stderr_tail"].as_str().unwrap_or(""), n["stdout_tail"].as_str().unwrap_or(""));
+            bail!("the root of round {round} did not evaluate ({}):\n{}", root.status, note_output(&res.note));
         }
         Ok(root)
     }
@@ -425,7 +424,7 @@ impl Engine {
                 (None, s) => s,
                 (b, _) => b,
             };
-            println!("  r{round} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(&n.change, 60));
+            println!("  r{round} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
         })?;
         let best = self.promote(&t)?;
         self.log(&format!("  r{round}: {} calls, promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), best.id, fs(best.score), sim::gain(&t) * 100.0, &best.sha[..10]));
@@ -543,16 +542,28 @@ impl World for LiveWorld<'_> {
     }
 }
 
+/// Where, inside the scratch worktree, git-dream puts the files it hands a
+/// command agent (the history, the proposal to write). Inside the worktree so a
+/// sandboxed agent may use them; removed before the attempt is snapshotted, so
+/// they never enter a commit.
+pub const AGENT_DIR: &str = ".dream-agent";
+const HISTORY_FILE: &str = "history.md";
+const MESSAGE_FILE: &str = "message.md";
+
 fn run_agent(e: &Engine, c: &CommandAgent, t: &Tree, parent: usize, k: usize, parent_tree: &str) -> Result<(String, String, Value)> {
     let wt = e.wt()?;
     e.mem.materialize(&wt, parent_tree)?;
-    let tmp = e.mem.state.join("tmp");
-    std::fs::create_dir_all(&tmp)?;
-    let ctx = tmp.join(format!("context-{}.md", e.run));
-    let msgf = tmp.join(format!("message-{}.txt", e.run));
-    let _ = std::fs::remove_file(&msgf);
+    let dir = wt.join(AGENT_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let ctx = dir.join(HISTORY_FILE);
+    let msgf = dir.join(MESSAGE_FILE);
+    // Every round of this run so far: earlier ones from git, this one in progress.
+    let earlier: Vec<Tree> = e.mem.history(&e.run)?.into_iter().filter(|h| h.round < t.round).collect();
+    let trees: Vec<&Tree> = earlier.iter().chain([t]).collect();
+    let failed: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != OK && n.status != NOOP).map(|n| n.sha.as_str()).collect();
+    let notes = e.mem.notes_of(&failed)?;
+    std::fs::write(&ctx, history_context(&trees, parent, k, &notes))?;
     let context = agent_context(t, parent, k);
-    std::fs::write(&ctx, &context)?;
     let p = &t.nodes[parent];
     let env = vec![
         ("DREAM_RUN".to_string(), e.run.clone()),
@@ -567,13 +578,15 @@ fn run_agent(e: &Engine, c: &CommandAgent, t: &Tree, parent: usize, k: usize, pa
         ("DREAM_WORKTREE".into(), wt.to_string_lossy().into_owned()),
     ];
     let r = sh(&c.command, &wt, &env, c.timeout)?;
-    let tree = e.mem.snapshot(&wt)?;
     let msg = std::fs::read_to_string(&msgf).map(|s| s.trim().to_string()).unwrap_or_default();
     let msg = if msg.is_empty() { format!("agent change (k={k})") } else { msg };
-    Ok((tree, msg, json!({"exit": r.exit_json(), "seconds": (r.seconds * 1000.0).round() / 1000.0, "stdout_tail": tail(&r.stdout, 20), "stderr_tail": tail(&r.stderr, 20)})))
+    std::fs::remove_dir_all(&dir)?;
+    let tree = e.mem.snapshot(&wt)?;
+    Ok((tree, msg, json!({"exit": r.exit_json(), "seconds": (r.seconds * 1000.0).round() / 1000.0, "stdout": excerpt(&r.stdout, 10, 20), "stderr": excerpt(&r.stderr, 10, 20)})))
 }
 
-/// What a (LLM) command agent is told about where it is in the search.
+/// The prompt's search context for a command agent: where it is, and how to use
+/// the full history (the exploration procedure of Dream-RSI, appendix B.1).
 pub fn agent_context(t: &Tree, parent: usize, k: usize) -> String {
     let p = &t.nodes[parent];
     let better = if t.goal == Goal::Min { "lower" } else { "higher" };
@@ -583,21 +596,89 @@ pub fn agent_context(t: &Tree, parent: usize, k: usize) -> String {
         path.push(&t.nodes[q]);
     }
     for a in path.iter().rev() {
-        s += &format!("- n{:03} {} {}: {}\n", a.id, a.status, fs(a.score), short(&a.change, 200));
+        s += &format!("- n{:03} {} {}: {}\n", a.id, a.status, fs(a.score), short(summary(&a.change), 200));
     }
     let kids = t.children(p.id);
     if !kids.is_empty() {
-        s += "\n## Already tried from this attempt (do something different)\n";
+        s += "\n## Already tried from this attempt\n";
         for c in kids {
-            s += &format!("- n{:03} {} {}: {}\n", c.id, c.status, fs(c.score), short(&c.change, 200));
+            s += &format!("- n{:03} {} {}: {}\n", c.id, c.status, fs(c.score), short(summary(&c.change), 200));
         }
     }
     if let Some(b) = t.best() {
         if b.id != p.id {
-            s += &format!("\nBest attempt this round: n{:03} {}: {}\n", b.id, fs(b.score), short(&b.change, 200));
+            s += &format!("\nBest attempt this round: n{:03} {}: {}\n", b.id, fs(b.score), short(summary(&b.change), 200));
         }
     }
-    s + "\nMake one focused change. Optionally write a one-line summary of it to the file named by $DREAM_MESSAGE_FILE.\n"
+    let (h, m) = (format!("{AGENT_DIR}/{HISTORY_FILE}"), format!("{AGENT_DIR}/{MESSAGE_FILE}"));
+    s + &format!(
+        "
+## How to work
+
+1. Before you change anything, read the whole search history in `{h}`: every attempt of every round, not only this branch. It holds each attempt's write-up, its measured result and, for failures, the evaluator's output.
+2. Trust measured results over what a write-up claims. For each failure, decide whether the idea was wrong or only its implementation (a bug, a bad parameter). Don't repeat a wrong idea. Retry a badly implemented one only after you have found the fault in its code (`git show <commit>`) and have a specific fix.
+3. If most attempts are small variations of one idea with shrinking gains, prefer a structurally different idea or an untried combination over another small tweak.
+4. Make one change, and make it new: not a repeat or a rename of an earlier attempt.
+5. Write your proposal to `{m}`: a one-line summary, a blank line, then the idea, the evidence from the history behind it, and why it is not a repeat. Don't claim results; the evaluator measures them. Leave the rest of `{AGENT_DIR}/` alone: it is removed before your change is committed.
+"
+    )
+}
+
+/// The complete search history handed to a command agent (`$DREAM_CONTEXT`):
+/// every attempt of every round so far (`trees`, the last one in progress),
+/// with its write-up, its measured result and, for failures, the evaluator's
+/// output from the attempt's note. Raw evidence, not a summary: in Dream-RSI
+/// (§5.1, Fig. 5), distilled "directional insights" made the search worse.
+pub fn history_context(trees: &[&Tree], parent: usize, k: usize, notes: &HashMap<String, Value>) -> String {
+    let Some(cur) = trees.last() else { return String::new() };
+    let better = if cur.goal == Goal::Min { "lower" } else { "higher" };
+    let mut s = format!(
+        "# Search history: run {}\n\nScore: {better} is better; failed attempts have no score. You are continuing r{:02} n{:03} (continuation #{}).\n\n\
+         Every attempt is a git commit. `git show <commit>` shows what it changed relative to the attempt it continued; `git diff <a> <b>` compares two attempts. \
+         The write-ups are the agents' own words, written before evaluation. Status, score and evaluator output are measured.\n",
+        cur.run,
+        cur.round,
+        parent,
+        k + 1
+    );
+    for t in trees {
+        let best = t.best().map_or(String::new(), |b| format!(", best n{:03} {}", b.id, fs(b.score)));
+        s += &format!("\n## Round {} ({} attempt{}{best})\n", t.round, t.calls(), if t.calls() == 1 { "" } else { "s" });
+        for n in &t.nodes {
+            let note = notes.get(&n.sha);
+            let result = match n.status.as_str() {
+                OK => format!("ok {}", fs(n.score)),
+                NOOP => "noop (the agent changed nothing)".into(),
+                st => match note {
+                    Some(v) if v.get("reused").is_some() => format!("{st} (same code as {}, not re-run)", short(v["reused"].as_str().unwrap_or(""), 10)),
+                    Some(v) => failure(v).map_or(st.to_string(), |f| format!("{st} ({f})")),
+                    None => st.to_string(),
+                },
+            };
+            let from = n.parent.map_or("root".to_string(), |p| format!("continues n{p:03}"));
+            let here = if t.round == cur.round && n.id == parent { " · **you are continuing this attempt**" } else { "" };
+            s += &format!("\n### r{:02} n{:03} · {from} · {result} · {}{here}\n", t.round, n.id, &n.sha[..n.sha.len().min(10)]);
+            let w = n.change.trim();
+            if !w.is_empty() {
+                s += "\n";
+                for l in w.lines() {
+                    s += &format!("> {l}\n").replace("> \n", ">\n");
+                }
+            }
+            if n.status != OK && n.status != NOOP {
+                let out = note.map(note_output).unwrap_or_default();
+                if !out.is_empty() {
+                    s += &format!("\nEvaluator output:\n\n````text\n{out}\n````\n");
+                }
+            }
+        }
+    }
+    s
+}
+
+/// The first line of an attempt's write-up.
+pub fn summary(change: &str) -> &str {
+    change.trim().lines().next().unwrap_or("")
 }
 
 pub fn fs(x: Option<f64>) -> String {

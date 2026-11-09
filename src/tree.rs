@@ -58,7 +58,8 @@ pub struct Node {
     pub design: String,
     pub score: Option<f64>,
     pub status: String,
-    /// One-line description of what the agent changed.
+    /// The agent's write-up of its change: a one-line summary, optionally
+    /// followed by the idea, its evidence and why it is not a repeat.
     pub change: String,
     /// How many times this node has been continued.
     pub n_exp: usize,

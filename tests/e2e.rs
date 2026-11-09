@@ -122,6 +122,34 @@ fn command_agent_end_to_end() {
     assert!(rr.miss_rate > 0.0);
 }
 
+/// The agent gets every attempt of every round (write-ups, results, failure
+/// output); its multi-line proposal is kept in full; failures get a trailer.
+#[test]
+fn agent_sees_whole_history() {
+    let agent = r#"command = 'cp "$DREAM_CONTEXT" "$DREAM_WORKTREE/../history.md" && ./agent.sh && printf "\nIdea: a test write-up.\nSecond line.\n" >> "$DREAM_MESSAGE_FILE"'"#;
+    let eval = r#"command = 'if [ "$DREAM_NODE" -ge 2 ]; then echo "solver.awk:3: syntax error" >&2; exit 3; fi; ./bench.sh'"#;
+    let r = repo("toy-command", "history", |s| s.replace("budget = 12", "budget = 4").replace("command = \"./agent.sh\"", agent).replace("command = \"./bench.sh\"", eval));
+    let e = open(&r, None);
+    let trees = e.rounds(2, false, None, None, None).unwrap();
+    let ctx = std::fs::read_to_string(r.0.join(".git/dream/wt/history.md")).unwrap();
+    for want in ["## Round 1", "## Round 2", "> Second line.", "fail (exit 3)", "solver.awk:3: syntax error", "**you are continuing this attempt**"] {
+        assert!(ctx.contains(want), "history lacks {want:?}:\n{ctx}");
+    }
+    let edits: Vec<_> = trees.iter().flat_map(|t| &t.nodes[1..]).filter(|n| n.status != "noop").collect();
+    assert!(edits.iter().all(|n| n.change.ends_with("\n\nIdea: a test write-up.\nSecond line.") && n.change.lines().count() == 4));
+    // the full write-up round-trips through git
+    for t in &trees {
+        let lt = e.mem.load_tree("main", t.round).unwrap().unwrap();
+        assert_eq!(lt.nodes.iter().map(|n| &n.change).collect::<Vec<_>>(), t.nodes.iter().map(|n| &n.change).collect::<Vec<_>>());
+    }
+    let failed = edits.iter().find(|n| n.status == "fail").expect("a failed attempt");
+    assert!(git(&r.0, &["log", "-1", "--format=%B", &failed.sha]).contains("Dream-Failure: exit 3"));
+    // the agent's files never enter a commit
+    for n in &edits {
+        assert!(!git(&r.0, &["ls-tree", "-r", "--name-only", &n.sha]).contains(".dream-agent"));
+    }
+}
+
 #[test]
 fn noop_attempts() {
     let r = repo("toy-command", "noop", |s| s.replace("command = \"./agent.sh\"", "command = \"test $DREAM_K = 0 || ./agent.sh\"").replace("budget = 12", "budget = 4"));
