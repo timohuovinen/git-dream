@@ -436,7 +436,7 @@ impl Engine {
     /// The round is already recorded, so a failure here is only a warning.
     fn compact(&self, round: u32) {
         let s = &self.cfg.storage;
-        let r = if s.gc_every > 0 && round % s.gc_every == 0 {
+        let r = if s.gc_every > 0 && round.is_multiple_of(s.gc_every) {
             self.log(&format!("  r{round}: git gc"));
             self.mem.gc()
         } else if s.repack {
