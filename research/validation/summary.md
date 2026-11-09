@@ -1,0 +1,32 @@
+| Task | Method | Mean regret ↓ | Paired regret difference vs refine (95% bootstrap CI) | Mean evaluations |
+|---|---|---:|---:|---:|
+| deceptive | adaptive_cache | 21.330 | +0.000 [+0.000, +0.000] | 97.0 |
+| deceptive | adaptive_stopping | 21.330 | +0.000 [+0.000, +0.000] | 79.7 |
+| deceptive | adaptive_strict | 21.330 | +0.000 [+0.000, +0.000] | 97.0 |
+| deceptive | equal_allocation | 6.600 | -14.730 [-16.630, -12.840] | 97.0 |
+| deceptive | fixed_ucb | 21.440 | +0.110 [-0.690, +1.000] | 97.0 |
+| deceptive | frozen | 21.330 | +0.000 [+0.000, +0.000] | 97.0 |
+| deceptive | random_tree | 22.110 | +0.780 [-0.610, +2.100] | 97.0 |
+| deceptive | refine_best | 21.330 | +0.000 [+0.000, +0.000] | 97.0 |
+| deceptive | successive_halving | 1.630 | -19.700 [-21.260, -18.180] | 97.0 |
+| deceptive | uniform_random | 3.220 | -18.110 [-19.430, -16.920] | 97.0 |
+| rugged | adaptive_cache | 54.369 | +0.000 [+0.000, +0.000] | 97.0 |
+| rugged | adaptive_stopping | 54.369 | +0.000 [+0.000, +0.000] | 94.0 |
+| rugged | adaptive_strict | 54.369 | +0.000 [+0.000, +0.000] | 97.0 |
+| rugged | equal_allocation | 23.274 | -31.095 [-42.751, -19.157] | 97.0 |
+| rugged | fixed_ucb | 236.347 | +181.978 [+138.760, +227.921] | 97.0 |
+| rugged | frozen | 54.369 | +0.000 [+0.000, +0.000] | 97.0 |
+| rugged | random_tree | 240.433 | +186.064 [+165.897, +205.878] | 97.0 |
+| rugged | refine_best | 54.369 | +0.000 [+0.000, +0.000] | 97.0 |
+| rugged | successive_halving | 5.486 | -48.883 [-58.807, -38.948] | 97.0 |
+| rugged | uniform_random | 12.918 | -41.451 [-51.120, -31.739] | 97.0 |
+| smooth | adaptive_cache | 4.840 | +0.000 [+0.000, +0.000] | 97.0 |
+| smooth | adaptive_stopping | 4.840 | +0.000 [+0.000, +0.000] | 96.6 |
+| smooth | adaptive_strict | 4.840 | +0.000 [+0.000, +0.000] | 97.0 |
+| smooth | equal_allocation | 8.880 | +4.040 [-2.550, +9.710] | 97.0 |
+| smooth | fixed_ucb | 111.260 | +106.420 [+74.700, +142.400] | 97.0 |
+| smooth | frozen | 4.840 | +0.000 [+0.000, +0.000] | 97.0 |
+| smooth | random_tree | 209.230 | +204.390 [+186.800, +222.440] | 97.0 |
+| smooth | refine_best | 4.840 | +0.000 [+0.000, +0.000] | 97.0 |
+| smooth | successive_halving | 0.040 | -4.800 [-10.440, -1.000] | 97.0 |
+| smooth | uniform_random | 3.220 | -1.620 [-7.220, +2.280] | 97.0 |

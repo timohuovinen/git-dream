@@ -1,4 +1,4 @@
-//! git-dream: a lightweight Dream-RSI loop that uses git as its only memory.
+//! git-dream: Git-native experimental search with replay diagnostics.
 //!
 //! * [`tree`]     discovery trees (what a round produces, what policies see)
 //! * [`policies`] exploration policies (built-in families + external commands)

@@ -35,9 +35,11 @@ remeasure_root = false            # true for noisy benchmarks: re-measure each r
 confirm_top = 0                   # re-measure the top-k designs before promoting (noisy benchmarks)
 
 [explore]
-budget = 20                       # max evaluations per round
+budget = 20                       # max proposals per round (root and confirmation evaluations are extra)
+min_calls = 5                     # continue best if the policy stops before this floor
 
 [dream]
+holdout = 1                      # reserve last round per run; keep incumbent until enough history
 lam = 0.02                        # cost of spending the whole budget, in units of relative improvement
 candidates = 300                  # sampled policies per dream
 mode = "cache"                    # cache: reuse any recorded measurement of a design; strict: recorded edges only
@@ -77,11 +79,14 @@ goal = "min"
 timeout = 900
 remeasure_root = true
 confirm_top = 2
+protected = ["bench.sh", "tests"] # reject direct edits to the evaluation contract
 
 [explore]
-budget = 6                        # agent calls are expensive: keep rounds small
+budget = 6                        # max proposals; root and confirmation evaluations are extra
+min_calls = 2                     # preserve some exploration if the policy stops
 
 [dream]
+holdout = 1                      # reserve last round per run; keep incumbent until enough history
 lam = 0.05
 candidates = 300
 mode = "strict"                   # stochastic agent: only recorded edges can be replayed
@@ -96,7 +101,7 @@ gc_every = 10                     # every N rounds also run `git gc` to merge th
 "#;
 
 #[derive(Parser)]
-#[command(name = "git dream", version, about = "Dream-RSI on git: improve how a search explores a repository, using git as memory.")]
+#[command(name = "git dream", version, about = "Git-native experimental search: preserve attempts, reproduce evaluations, compare exploration policies.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -162,6 +167,9 @@ enum Cmd {
     /// Score policies on recorded history ("family:k=v,..." or JSON; default: the deployed policy)
     Replay {
         policy: Vec<String>,
+        /// Report disjoint training / held-out replay (last N rounds of each run)
+        #[arg(long)]
+        holdout: Option<usize>,
         #[arg(long)]
         budget: Option<usize>,
         #[arg(long, value_parser = ["cache", "strict"])]
@@ -231,7 +239,7 @@ fn parse_policy(e: &Engine, s: &str) -> Result<Policy> {
 
 fn status(e: &Engine) -> Result<()> {
     let rounds = e.mem.rounds(&e.run)?;
-    let base = e.mem.base(&e.run)?;
+    let base = e.mem.rev(&format!("refs/dream/{}/base", e.run)).or_else(|| e.mem.rev("HEAD^{commit}")).ok_or_else(|| anyhow::anyhow!("repository has no commits"))?;
     println!("run {:?}: base {}, goal {}, agent {}, {} rounds", e.run, &base[..10], e.goal.as_str(), e.agent.kind(), rounds.len());
     let mut cum = 0;
     for r in rounds {
@@ -239,11 +247,13 @@ fn status(e: &Engine) -> Result<()> {
         cum += t.calls();
         let promoted = e.mem.rev(&format!("refs/dream/{}/r{r:02}/best", e.run));
         let pn = t.nodes.iter().find(|n| Some(&n.sha) == promoted.as_ref());
+        let notes = e.mem.notes_of(&t.nodes.iter().map(|n| n.sha.as_str()).collect::<Vec<_>>())?;
+        let evaluations: usize = notes.values().map(|n| usize::from(n.get("seconds").is_some()) + n["confirmation"]["evaluations"].as_array().map_or(0, Vec::len)).sum();
         println!(
-            "  r{r:02} {:3} calls (cum {cum:4})  root {:>10}  best {:>10}  {:10}  {}",
+            "  r{r:02} {:3} calls (cum {cum:4}), {evaluations} evaluator runs  root {:>10}  best {:>10}  {:10}  {}",
             t.calls(),
             fs(t.root().score),
-            fs(pn.and_then(|n| n.score)),
+            fs(pn.and_then(|n| notes.get(&n.sha).and_then(|note| note["confirmation"]["score"].as_f64()).or(n.score))),
             pn.map_or("-".to_string(), |n| n.sha[..10].to_string()),
             short(&t.policy, 70)
         );
@@ -295,10 +305,19 @@ fn real_main() -> Result<()> {
                 println!("(dry run: nothing deployed)");
             }
         }
-        Cmd::Replay { policy, budget, mode: m, verbose, c } => {
+        Cmd::Replay { policy, holdout, budget, mode: m, verbose, c } => {
             let e = engine(&c)?;
             let pols = if policy.is_empty() { vec![e.current_policy()?] } else { policy.iter().map(|s| parse_policy(&e, s)).collect::<Result<_>>()? };
             for p in pols {
+                if let Some(n) = holdout {
+                    let (train, test) = git_dream::sim::split_history(&e.replay_history()?, n)?;
+                    for (label, hist) in [("training", train), ("held-out", test)] {
+                        let r = git_dream::sim::replay(&p, &hist, budget.unwrap_or(e.cfg.explore.budget), e.cfg.dream.lam, e.agent.space(), mode(&m)?.unwrap_or(e.mode()), e.cfg.dream.normalize == "root", false)?;
+                        println!("{label}: J={:+.4} gain={:+.2}% calls={} miss={:.2} rounds={} {}", r.j, r.gain * 100.0, r.calls, r.miss_rate, hist.len(), p.repr());
+                    }
+                    println!("Held-out replay diagnoses overfitting; it does not estimate unobserved outcomes or establish live improvement.");
+                    continue;
+                }
                 let r = e.replay(&p, mode(&m)?, budget)?;
                 println!("J={:+.4} gain={:+.2}% calls={:4} miss={:.2}  {}", r.j, r.gain * 100.0, r.calls, r.miss_rate, p.repr());
                 if verbose {

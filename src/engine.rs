@@ -34,7 +34,7 @@ impl Default for Config {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentCfg {
     pub kind: String,
@@ -57,9 +57,11 @@ impl Default for AgentCfg {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EvalCfg {
+    /// Paths a command agent may not change (evaluator, tests, fixtures).
+    pub protected: Vec<String>,
     pub command: String,
     pub goal: Goal,
     pub timeout: f64,
@@ -74,7 +76,7 @@ pub struct EvalCfg {
 
 impl Default for EvalCfg {
     fn default() -> Self {
-        EvalCfg { command: String::new(), goal: Goal::Min, timeout: 600.0, reuse: false, remeasure_root: false, confirm_top: 0, confirm_reps: 1 }
+        EvalCfg { protected: vec![], command: String::new(), goal: Goal::Min, timeout: 600.0, reuse: false, remeasure_root: false, confirm_top: 0, confirm_reps: 1 }
     }
 }
 
@@ -82,17 +84,20 @@ impl Default for EvalCfg {
 #[serde(default, deny_unknown_fields)]
 pub struct ExploreCfg {
     pub budget: usize,
+    pub min_calls: usize,
 }
 
 impl Default for ExploreCfg {
     fn default() -> Self {
-        ExploreCfg { budget: 20 }
+        ExploreCfg { budget: 20, min_calls: 0 }
     }
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct DreamCfg {
+    /// Last N rounds per run reserved for a diagnostic deployment gate (0 disables).
+    pub holdout: usize,
     pub lam: f64,
     pub candidates: usize,
     pub mode: String,
@@ -104,7 +109,7 @@ pub struct DreamCfg {
 
 impl Default for DreamCfg {
     fn default() -> Self {
-        DreamCfg { lam: 0.02, candidates: 300, mode: "cache".into(), normalize: "none".into(), history: "run".into() }
+        DreamCfg { holdout: 1, lam: 0.02, candidates: 300, mode: "cache".into(), normalize: "none".into(), history: "run".into() }
     }
 }
 
@@ -189,6 +194,15 @@ impl Engine {
             k => bail!("unknown agent kind {k:?} (space | command)"),
         };
         Mode::parse(&cfg.dream.mode)?;
+        anyhow::ensure!(cfg.explore.budget > 0, "explore.budget must be positive");
+        anyhow::ensure!(cfg.explore.min_calls <= cfg.explore.budget, "explore.min_calls exceeds budget");
+        anyhow::ensure!(cfg.dream.lam.is_finite() && cfg.dream.lam >= 0.0, "dream.lam must be finite and nonnegative");
+        anyhow::ensure!(["none", "root"].contains(&cfg.dream.normalize.as_str()), "dream.normalize must be none or root");
+        anyhow::ensure!(["run", "all"].contains(&cfg.dream.history.as_str()), "dream.history must be run or all");
+        for timeout in [cfg.agent.timeout, cfg.evaluate.timeout] {
+            anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "timeouts must be finite, positive and below 1e9 seconds");
+        }
+        anyhow::ensure!(cfg.evaluate.confirm_top == 0 || cfg.evaluate.confirm_reps > 0, "confirmation needs confirm_reps > 0");
         let mut registry = Registry::builtin();
         let mut external_files = vec![];
         for (name, v) in &cfg.policies.external {
@@ -198,12 +212,13 @@ impl Engine {
             if let Some(g) = t.get("grid").and_then(|g| g.as_table()) {
                 for (k, vals) in g {
                     let vals = vals.as_array().ok_or_else(|| anyhow!("grid {name}.{k} must be an array"))?;
+                    anyhow::ensure!(!vals.is_empty(), "grid {name}.{k} must not be empty");
                     grid.push((k.clone(), vals.iter().map(|x| Param::from_json(&toml_to_json(x))).collect::<Result<Vec<_>>>()?));
                 }
             }
             let doc = t.get("doc").and_then(|d| d.as_str()).unwrap_or("external policy");
             // run relative commands from the repository root
-            registry.add_external(name, &format!("cd {} && {command}", shell_quote(&mem.top.to_string_lossy())), grid, doc)?;
+            registry.add_external_with_timeout(name, &format!("cd {} && {command}", shell_quote(&mem.top.to_string_lossy())), grid, doc, t.get("timeout").and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64))).unwrap_or(10.0))?;
             if let Some(src) = t.get("source").and_then(|s| s.as_str()) {
                 if let Ok(text) = std::fs::read_to_string(mem.top.join(src)) {
                     external_files.push((Path::new(src).file_name().unwrap().to_string_lossy().into_owned(), text));
@@ -211,7 +226,17 @@ impl Engine {
             }
         }
         let goal = cfg.evaluate.goal;
-        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: RefCell::new(HashMap::new()), external_files })
+        let mut seen = HashMap::new();
+        if cfg.evaluate.reuse {
+            for t in mem.history(&run)? {
+                for n in t.nodes {
+                    if n.status != NOOP {
+                        seen.entry(n.design).or_insert((n.score, n.status, n.sha));
+                    }
+                }
+            }
+        }
+        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: RefCell::new(seen), external_files })
     }
 
     fn log(&self, s: &str) {
@@ -263,12 +288,18 @@ impl Engine {
     }
 
     pub fn initial_policy(&self) -> Result<Policy> {
-        self.registry.make(&toml_to_json(&toml::Value::Table(self.cfg.policies.initial.clone())))
+        let mut p = self.registry.make(&toml_to_json(&toml::Value::Table(self.cfg.policies.initial.clone())))?;
+        p.set_min_calls(self.cfg.explore.min_calls);
+        Ok(p)
     }
 
     pub fn deployed(&self, round: Option<u32>) -> Result<Option<Policy>> {
         match self.mem.policy_doc(&self.run, round) {
-            Some(doc) => Ok(Some(self.registry.make(&doc["policy"])?)),
+            Some(doc) => {
+                let mut p = self.registry.make(&doc["policy"])?;
+                p.set_min_calls(self.cfg.explore.min_calls);
+                Ok(Some(p))
+            },
             None => Ok(None),
         }
     }
@@ -298,6 +329,23 @@ impl Engine {
         }
     }
 
+    /// A design key alone does not identify its objective or proposal operator.
+    /// Reject pooling incompatible experiments instead of silently reusing scores.
+    pub fn replay_history(&self) -> Result<Vec<Tree>> {
+        let hist = self.history()?;
+        let base = self.mem.rev(&format!("refs/dream/{}/base", self.run)).or_else(|| self.mem.rev("HEAD^{commit}"));
+        for t in &hist {
+            let path = format!("refs/tags/dream/{}/policy-r{:02}:git-dream.toml", t.run, t.round);
+            let raw = self.mem.git(&["show", &path]).with_context(|| format!("cannot verify experiment configuration for {} r{}", t.run, t.round))?;
+            let recorded: Config = toml::from_str(&raw)?;
+            anyhow::ensure!(recorded.agent == self.cfg.agent && recorded.evaluate == self.cfg.evaluate,
+                "incompatible agent/evaluator configuration in {} r{}; use a separate run and history = run", t.run, t.round);
+            anyhow::ensure!(self.mem.rev(&format!("refs/dream/{}/base", t.run)) == base,
+                "cannot replay runs with different base commits ({})", t.run);
+        }
+        Ok(hist)
+    }
+
     pub fn next_round(&self) -> Result<u32> {
         Ok(self.mem.rounds(&self.run)?.last().map_or(1, |r| r + 1))
     }
@@ -310,7 +358,7 @@ impl Engine {
             Some(r) => r,
             None => self.next_round()?,
         };
-        let hist = self.history()?;
+        let hist = self.replay_history()?;
         let current = self.current_policy()?;
         if hist.is_empty() {
             self.log(&format!("dream: no history yet, keeping {}", current.repr()));
@@ -319,12 +367,15 @@ impl Engine {
         let budget = budget.unwrap_or(self.cfg.explore.budget);
         let mode = mode.unwrap_or(self.mode());
         let eff = if self.agent.space().is_some() { mode } else { Mode::Strict };
+        let partition = if self.cfg.dream.holdout > 0 { sim::split_history(&hist, self.cfg.dream.holdout).ok() } else { None };
+        let training = partition.as_ref().map_or(hist.as_slice(), |(train, _)| train.as_slice());
         let fams = self.registry.searchable(&self.cfg.policies.families);
         let a = DreamArgs {
-            history: &hist,
+            history: training,
             budget,
             lam: self.cfg.dream.lam,
             candidates: candidates.unwrap_or(self.cfg.dream.candidates),
+            min_calls: self.cfg.explore.min_calls,
             seed: hash(&format!("{}|{round}", self.run)),
             agent: self.agent.space(),
             mode: eff,
@@ -333,14 +384,28 @@ impl Engine {
             families: &fams,
         };
         let ranking = sim::dream(&current, &[], &a)?;
-        let (best, top) = (&ranking[0].0, &ranking[0].1);
+        let (candidate, top) = (&ranking[0].0, &ranking[0].1);
+        let (accepted, validation) = if let Some((_, test)) = &partition {
+            let replay = |p| sim::replay(p, test, budget, self.cfg.dream.lam, self.agent.space(), eff, self.normalize_root(), false);
+            let proposed = replay(candidate)?;
+            let incumbent = replay(&current)?;
+            (proposed.j > incumbent.j && proposed.miss_rate <= incumbent.miss_rate, json!({
+                "candidate_J": proposed.j, "current_J": incumbent.j,
+                "candidate_miss_rate": proposed.miss_rate, "current_miss_rate": incumbent.miss_rate,
+                "rounds": test.iter().map(|t| json!({"run": t.run, "round": t.round})).collect::<Vec<_>>(),
+                "caveat": "diagnostic gate only; repeated use and behavior-policy selection prevent an unbiased generalization estimate"
+            }))
+        } else { (self.cfg.dream.holdout == 0, json!({"reason": "held-out gate disabled or insufficient history"})) };
+        let best = if accepted { candidate } else { &current };
+        self.log(&format!("held-out deployment gate: {} ({validation})", if accepted { "accepted" } else { "keeping incumbent" }));
         let cur = &ranking.iter().find(|(c, _)| c.repr() == current.repr()).unwrap().1;
         self.log(&format!("dream r{round}: {} policies over {} trees ({}); current J={:.4}, best J={:.4} -> {}", ranking.len(), hist.len(), eff.as_str(), cur.j, top.j, best.repr()));
         if commit {
             let doc = json!({
                 "run": self.run, "round": round, "policy": best.spec(), "repr": best.repr(),
+                "validation": validation, "accepted": accepted, "candidate": candidate.spec(),
                 "why": format!("dreamt over {} recorded trees, {} candidate policies, {} replay", hist.len(), ranking.len(), eff.as_str()),
-                "dream": {"J": top.j, "gain": top.gain, "calls": top.calls, "miss_rate": top.miss_rate, "J_current": cur.j, "current": current.repr(),
+                "dream": {"J": if accepted { top.j } else { cur.j }, "candidate_J": top.j, "gain": if accepted { top.gain } else { cur.gain }, "calls": if accepted { top.calls } else { cur.calls }, "miss_rate": if accepted { top.miss_rate } else { cur.miss_rate }, "J_current": cur.j, "current": current.repr(),
                           "mode": eff.as_str(), "lam": self.cfg.dream.lam, "budget": budget, "trees": hist.len(), "candidates": ranking.len()},
                 "top": ranking.iter().take(10).map(|(c, r)| json!({"policy": c.repr(), "spec": c.spec(), "J": r.j, "gain": r.gain, "calls": r.calls, "miss_rate": r.miss_rate})).collect::<Vec<_>>(),
             });
@@ -350,7 +415,7 @@ impl Engine {
     }
 
     pub fn replay(&self, policy: &Policy, mode: Option<Mode>, budget: Option<usize>) -> Result<ReplayResult> {
-        let hist = self.history()?;
+        let hist = self.replay_history()?;
         sim::replay(policy, &hist, budget.unwrap_or(self.cfg.explore.budget), self.cfg.dream.lam, self.agent.space(), mode.unwrap_or(self.mode()), self.normalize_root(), true)
     }
 
@@ -386,12 +451,13 @@ impl Engine {
             let parent = self.mem.rev(&prev_ref).ok_or_else(|| anyhow!("round {} has no promoted attempt", round - 1))?;
             let prev = self.mem.load_tree(&self.run, round - 1)?.ok_or_else(|| anyhow!("round {} not found", round - 1))?;
             let pn = prev.nodes.iter().find(|n| n.sha == parent).ok_or_else(|| anyhow!("promoted attempt of round {} not in its tree", round - 1))?.clone();
-            let res = if self.cfg.evaluate.remeasure_root { None } else { Some(EvalResult { score: pn.score, status: pn.status.clone(), note: json!({"score": pn.score, "status": pn.status, "copied_from": parent}) }) };
+            let score = self.mem.read_note(&parent).and_then(|n| n["confirmation"]["score"].as_f64()).or(pn.score);
+            let res = if self.cfg.evaluate.remeasure_root { None } else { Some(EvalResult { score, status: pn.status.clone(), note: json!({"score": score, "status": pn.status, "copied_from": parent}) }) };
             (parent.clone(), self.mem.tree_of(&parent)?, pn.design.clone(), format!("from r{:02} n{:03}", round - 1, pn.id), res)
         };
         let res = match res {
             Some(r) => r,
-            None => self.evaluate(&tree, &design, round, 0, true)?,
+            None => self.evaluate(&tree, &design, round, 0, !self.cfg.evaluate.remeasure_root)?,
         };
         let mut root = Node::new(0, None, None, design, res.score, &res.status, change);
         t.set_root(root.clone());
@@ -399,6 +465,7 @@ impl Engine {
         if root.score.is_none() {
             bail!("the root of round {round} did not evaluate ({}):\n{}", root.status, note_output(&res.note));
         }
+        self.seen.borrow_mut().insert(root.design.clone(), (root.score, root.status.clone(), root.sha.clone()));
         Ok(root)
     }
 
@@ -407,7 +474,9 @@ impl Engine {
             Some(r) => r,
             None => self.next_round()?,
         };
+        if round > 1 { self.replay_history()?; }
         let budget = budget.unwrap_or(self.cfg.explore.budget);
+        anyhow::ensure!(budget > 0 && budget >= self.cfg.explore.min_calls, "budget must be positive and at least explore.min_calls");
         let mut policy = self.policy_for(round)?;
         self.log(&format!("explore r{round}: {}, budget {budget}", policy.repr()));
         let root = self.make_root(round, budget, &policy)?;
@@ -427,7 +496,7 @@ impl Engine {
             println!("  r{round} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
         })?;
         let best = self.promote(&t)?;
-        self.log(&format!("  r{round}: {} calls, promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), best.id, fs(best.score), sim::gain(&t) * 100.0, &best.sha[..10]));
+        self.log(&format!("  r{round}: {} calls, promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), best.id, fs(best.score), best.score.zip(t.root().score).map_or(0.0, |(b, r)| t.rel(b, r) * 100.0), &best.sha[..10]));
         self.compact(round);
         Ok(t)
     }
@@ -464,23 +533,28 @@ impl Engine {
                     top.push(n);
                 }
             }
+            if !top.iter().any(|n| n.design == t.root().design) { top.push(t.root()); }
             let mut means = vec![];
             for n in &top {
-                let mut vals = vec![n.score.unwrap()];
+                let mut vals = vec![];
+                let mut results = vec![];
                 for _ in 0..self.cfg.evaluate.confirm_reps {
-                    if let Some(s) = self.evaluate(&self.mem.tree_of(&n.sha)?, &n.design, t.round, n.id, false)?.score {
-                        vals.push(s);
-                    }
+                    let res = self.evaluate(&self.mem.tree_of(&n.sha)?, &n.design, t.round, n.id, false)?;
+                    vals.push(res.score);
+                    results.push(res.note);
                 }
-                let m = vals.iter().sum::<f64>() / vals.len() as f64;
+                let m = if vals.iter().all(Option::is_some) { Some(vals.iter().flatten().sum::<f64>() / vals.len() as f64) } else { None };
                 let mut note = self.mem.read_note(&n.sha).unwrap_or(json!({}));
                 note["confirm"] = json!(vals);
+                note["confirmation"] = json!({"score": m, "evaluations": results});
                 self.mem.note(&n.sha, &note)?;
                 means.push(m);
             }
-            let i = (0..top.len()).min_by(|&a, &b| t.cost(means[a]).total_cmp(&t.cost(means[b]))).unwrap();
+            let i = (0..top.len()).filter(|&i| means[i].is_some()).min_by(|&a, &b| t.cost(means[a].unwrap()).total_cmp(&t.cost(means[b].unwrap())))
+                .ok_or_else(|| anyhow!("all confirmation candidates failed; no attempt promoted"))?;
             best = top[i].clone();
-            self.log(&format!("  r{} confirm: {}", t.round, top.iter().zip(&means).map(|(n, m)| format!("n{:03} {}", n.id, fs(Some(*m)))).collect::<Vec<_>>().join(", ")));
+            best.score = means[i];
+            self.log(&format!("  r{} confirm: {}", t.round, top.iter().zip(&means).map(|(n, m)| format!("n{:03} {}", n.id, fs(*m))).collect::<Vec<_>>().join(", ")));
         }
         self.mem.set_ref(&format!("refs/dream/{}/r{:02}/best", self.run, t.round), &best.sha)?;
         self.mem.set_ref(&format!("refs/heads/dream/{}/best", self.run), &best.sha)?;
@@ -522,7 +596,15 @@ impl World for LiveWorld<'_> {
             }
         };
         let mut n = Node::new(nid, Some(parent), Some(k), design.clone(), None, OK, change);
-        let mut note = if parent_tree.as_deref() == Some(tree.as_str()) {
+        let protected_changed = if parent_tree.is_some() && !e.cfg.evaluate.protected.is_empty() {
+            let mut args = vec!["diff", "--name-only", self.base_tree.as_str(), tree.as_str(), "--"];
+            args.extend(e.cfg.evaluate.protected.iter().map(String::as_str));
+            e.mem.git(&args)?
+        } else { String::new() };
+        let mut note = if !protected_changed.is_empty() {
+            n.status = FAIL.into();
+            json!({"status": FAIL, "exit": "protected paths changed", "stderr": protected_changed})
+        } else if parent_tree.as_deref() == Some(tree.as_str()) {
             n.status = NOOP.into();
             json!({"status": NOOP})
         } else {

@@ -70,6 +70,7 @@ pub struct SpaceAgent {
 
 impl SpaceAgent {
     pub fn new(knobs: &toml::Table, start: &toml::Table, salt: &str, file: &str, p_two: f64, p_far: f64) -> Result<SpaceAgent> {
+        anyhow::ensure!([p_two, p_far].iter().all(|p| p.is_finite() && (0.0..=1.0).contains(p)), "agent probabilities must be between 0 and 1");
         if knobs.is_empty() {
             bail!("[agent] kind = \"space\" needs an [agent.knobs] table");
         }
@@ -274,29 +275,30 @@ fn sh_program() -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
-fn own_process_group(c: &mut Command) {
+pub(crate) fn own_process_group(c: &mut Command) {
     use std::os::unix::process::CommandExt;
     c.process_group(0);
 }
 
 #[cfg(not(unix))]
-fn own_process_group(_: &mut Command) {}
+pub(crate) fn own_process_group(_: &mut Command) {}
 
 #[cfg(unix)]
-fn kill_tree(child: &Child) {
-    let _ = Command::new("kill").arg("-KILL").arg(format!("-{}", child.id())).status();
+pub(crate) fn kill_tree(child: &Child) {
+    let _ = Command::new("kill").arg("-KILL").arg(format!("-{}", child.id())).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
 #[cfg(windows)]
-fn kill_tree(child: &Child) {
+pub(crate) fn kill_tree(child: &Child) {
     let _ = Command::new("taskkill").args(["/F", "/T", "/PID", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
 #[cfg(not(any(unix, windows)))]
-fn kill_tree(_: &Child) {}
+pub(crate) fn kill_tree(_: &Child) {}
 
 /// Run `sh -c command` in its own process group; kill the whole group on timeout.
 pub fn sh(command: &str, cwd: &Path, env: &[(String, String)], timeout: f64) -> Result<ShOut> {
+    anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "timeout must be finite, positive and below 1e9 seconds");
     let t0 = Instant::now();
     let mut cmd = sh_command(command);
     cmd.current_dir(cwd).envs(env.iter().map(|(a, b)| (a, b))).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -327,6 +329,9 @@ pub fn sh(command: &str, cwd: &Path, env: &[(String, String)], timeout: f64) -> 
         }
         std::thread::sleep(Duration::from_millis(5));
     };
+    // A shell may exit while descendants still hold stdout/stderr open.
+    // End the command group before joining readers, including on normal exit.
+    kill_tree(&child);
     Ok(ShOut { exit: status.code(), timed_out, seconds: t0.elapsed().as_secs_f64(), stdout: ho.join().unwrap_or_default(), stderr: he.join().unwrap_or_default() })
 }
 
@@ -472,6 +477,14 @@ mod tests {
         assert_eq!(f(json!({"exit": 0, "status": "full"})).as_deref(), Some("reported full"));
         assert_eq!(f(json!({"reused": "abc", "status": "fail"})), None);
         assert_eq!(note_output(&json!({"stderr_tail": "old", "stdout": ""})), "stderr:\nold");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_exit_does_not_wait_for_background_pipe_holders() {
+        let r = sh("sleep 5 & echo done", Path::new("."), &[], 0.2).unwrap();
+        assert!(r.seconds < 2.0);
+        assert_eq!(r.stdout.trim(), "done");
     }
 
     #[test]

@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-09",
+  "command": "cargo run --release --locked --example compare -- --seeds 100 --first-seed 10000",
+  "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)",
+  "base_revision": "37992c8dc9466f7db034b5c8765ab9090a69eeea",
+  "source_state": "uncommitted changes identified by the hashes below",
+  "sha256": {
+    "examples/compare.rs": "dbd4c77fb1290213e970460c8bc065d937d9aaf114efa6d3814045018b2aa531",
+    "src/agents.rs": "a896c58a6382654be5b5c63b19137fd9cab596304eed51499b8d7a52a082d291",
+    "src/policies.rs": "f3753c9bf0cf4c37f2823c20c973ea14247aafc2f76c77dd18cea0c5ace27ec1",
+    "src/sim.rs": "6a316e2d975112a643e1d01ede9a7dc40aaa34814e23321f2b87cface1b9fcd3",
+    "src/tree.rs": "add9bedbf0b511b80285d48a6a36232f20696de692d9820296b1c15a89db8626",
+    "src/rng.rs": "3731e1b4878a5275511db8a5cb2aa188503cce1ddfa5d550cd9f2b4b09ed9d5f",
+    "Cargo.lock": "de3b549493fb3d8c6e5c7e3856073896643c28a4f054a8e95ef43e64868b68c5",
+    "research/validation/results.jsonl": "50ac2e19a13eab683180a39d1eae421d070748e307169f8322889d7860497973",
+    "research/validation/summarize.py": "f631ac19662c5079bea0ed2a9e4aadb10b07659e79de5b84e06636c5609dcea6"
+  }
+}

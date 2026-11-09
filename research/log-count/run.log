@@ -1,0 +1,11 @@
+explore r1: refine_best(), budget 3
+  r1 n000 root 1449dd2ee1efce404face72… 26.7213
+  r1 n001 <- n000 fail           -  best    26.7213  Negative control: overwrite duplicate keys (must fail corre…
+  r1 n002 <- n000 ok       1.19346  best    1.19346  Aggregate borrowed keys in a hash map before sorting
+  r1 n003 <- n002 noop           -  best    1.19346  No further candidate supplied in this session
+  r1 confirm: n002 1.15516, n000 25.1593
+  r1: 3 calls, promoted n002 1.19346 (+95.53% vs root)  54cdbf6d5f
+run "main": base b81f61c648, goal min, agent command, 1 rounds
+  r01   3 calls (cum    3)  root    26.7213  best    1.19346  54cdbf6d5f  refine_best()
+deployed policy: refine_best()
+best attempt: dream/main/best = 54cdbf6d5f   (git diff b81f61c648 dream/main/best)
