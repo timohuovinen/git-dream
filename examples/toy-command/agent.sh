@@ -4,8 +4,10 @@
 # in $DREAM_MESSAGE_FILE. It ignores the history in $DREAM_CONTEXT that an LLM would read.
 set -e
 seed=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')
-awk -v seed="$seed" -v msg="${DREAM_MESSAGE_FILE:-/dev/null}" '
-BEGIN { srand(seed); split("STEP DAMPING ITERATIONS", names, " "); pick = names[int(rand() * 3) + 1] }
+# The message file comes in through ENVIRON, not `-v`: awk would read the
+# backslashes of a Windows path as escapes (\r, \a, ...).
+awk -v seed="$seed" '
+BEGIN { msg = ENVIRON["DREAM_MESSAGE_FILE"]; if (msg == "") msg = "/dev/null"; srand(seed); split("STEP DAMPING ITERATIONS", names, " "); pick = names[int(rand() * 3) + 1] }
 $1 == pick && $2 == "=" {
   old = $3
   if (pick == "ITERATIONS") { split("-4 -2 -1 1 2 4 8", d, " "); new = old + d[int(rand() * 7) + 1]; if (new < 1) new = 1 }
