@@ -1,2 +1,4 @@
 /target/
 __pycache__/
+# third-party papers: not redistributable, fetch with papers/fetch.sh
+/papers/*.pdf

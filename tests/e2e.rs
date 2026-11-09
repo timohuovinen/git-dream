@@ -182,3 +182,24 @@ done
     run(&["init", "--kind", "command"]);
     assert!(std::fs::read_to_string(r.0.join(".git-dream.toml")).unwrap().contains("kind = \"command\""));
 }
+
+fn loose_objects(dir: &Path) -> usize {
+    git(dir, &["count-objects", "-v"]).lines().find_map(|l| l.strip_prefix("count: ")).unwrap().parse().unwrap()
+}
+
+#[test]
+fn rounds_are_packed() {
+    let r = repo("toy-space", "pack", |s| s.replace("budget = 25", "budget = 6") + "\n[storage]\ngc_every = 2\n");
+    let e = open(&r, None);
+    e.rounds(1, false, None, None, None).unwrap();
+    assert_eq!(loose_objects(&r.0), 0, "round 1 should be repacked");
+    let packs = || std::fs::read_dir(r.0.join(".git/objects/pack")).unwrap().filter(|f| f.as_ref().unwrap().path().extension().is_some_and(|x| x == "pack")).count();
+    assert!(packs() >= 1);
+    e.rounds(1, false, None, None, None).unwrap();
+    assert_eq!(loose_objects(&r.0), 0);
+    assert_eq!(packs(), 1, "round 2 should run git gc and merge the packs");
+    // switched off: attempts stay loose
+    let r = repo("toy-space", "nopack", |s| s.replace("budget = 25", "budget = 6") + "\n[storage]\nrepack = false\ngc_every = 0\n");
+    open(&r, None).rounds(1, false, None, None, None).unwrap();
+    assert!(loose_objects(&r.0) > 0);
+}

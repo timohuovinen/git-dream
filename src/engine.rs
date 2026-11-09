@@ -25,11 +25,12 @@ pub struct Config {
     pub explore: ExploreCfg,
     pub dream: DreamCfg,
     pub policies: PoliciesCfg,
+    pub storage: StorageCfg,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { run: "main".into(), agent: AgentCfg::default(), evaluate: EvalCfg::default(), explore: ExploreCfg::default(), dream: DreamCfg::default(), policies: PoliciesCfg::default() }
+        Config { run: "main".into(), agent: AgentCfg::default(), evaluate: EvalCfg::default(), explore: ExploreCfg::default(), dream: DreamCfg::default(), policies: PoliciesCfg::default(), storage: StorageCfg::default() }
     }
 }
 
@@ -121,6 +122,25 @@ impl Default for PoliciesCfg {
         let mut initial = toml::Table::new();
         initial.insert("family".into(), toml::Value::String("refine_best".into()));
         PoliciesCfg { initial, families: vec![], external: toml::Table::new() }
+    }
+}
+
+/// Attempts are written with plumbing (hash-object, commit-tree, update-ref),
+/// which never triggers `git gc --auto`: every version of a file stays a full
+/// loose object until something packs it.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageCfg {
+    /// After each round, pack its loose objects into one pack (`git repack -d`),
+    /// so near-identical attempts are stored as deltas.
+    pub repack: bool,
+    /// Every N rounds also run `git gc` to merge the per-round packs (0 = never).
+    pub gc_every: u32,
+}
+
+impl Default for StorageCfg {
+    fn default() -> Self {
+        StorageCfg { repack: true, gc_every: 10 }
     }
 }
 
@@ -409,7 +429,25 @@ impl Engine {
         })?;
         let best = self.promote(&t)?;
         self.log(&format!("  r{round}: {} calls, promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), best.id, fs(best.score), sim::gain(&t) * 100.0, &best.sha[..10]));
+        self.compact(round);
         Ok(t)
+    }
+
+    /// Pack the round's loose objects (and every `gc_every` rounds run git gc).
+    /// The round is already recorded, so a failure here is only a warning.
+    fn compact(&self, round: u32) {
+        let s = &self.cfg.storage;
+        let r = if s.gc_every > 0 && round % s.gc_every == 0 {
+            self.log(&format!("  r{round}: git gc"));
+            self.mem.gc()
+        } else if s.repack {
+            self.mem.repack()
+        } else {
+            return;
+        };
+        if let Err(e) = r {
+            eprintln!("git dream: warning: packing objects after round {round} failed: {e:#}");
+        }
     }
 
     /// Pick the round's best attempt. With evaluate.confirm_top = k, the top k
