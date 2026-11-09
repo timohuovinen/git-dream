@@ -75,11 +75,10 @@ mod tests {
     #[test]
     fn stable() {
         // Pinned values: changing them changes every recorded agent proposal.
-        assert_eq!(hash("git-dream"), hash("git-dream"));
+        assert_eq!(hash("git-dream"), 11_182_977_865_865_597_688);
         let mut r = Rng::new(42);
         let a: Vec<u64> = (0..3).map(|_| r.next_u64()).collect();
-        let mut r = Rng::new(42);
-        assert_eq!(a, (0..3).map(|_| r.next_u64()).collect::<Vec<_>>());
+        assert_eq!(a, [13_679_457_532_755_275_413, 2_949_826_092_126_892_291, 5_139_283_748_462_763_858]);
         let s = Rng::new(7).sample(10, 4);
         assert_eq!(s.len(), 4);
         let mut d = s.clone();

@@ -13,8 +13,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 use std::rc::Rc;
 
 pub const INF: f64 = f64::INFINITY;
@@ -69,6 +71,7 @@ pub type Grid = Vec<(String, Vec<Param>)>;
 #[derive(Clone, Debug)]
 enum Kind {
     RefineBest,
+    Random,
     Ucb,
     Beam,
     Softmax,
@@ -108,6 +111,7 @@ impl Registry {
         let patience = nums(&[4.0, 6.0, 8.0, 12.0, 16.0, 24.0, INF]);
         let eps = nums(&[0.0, 0.005, 0.01, 0.02, 0.05]);
         let families = vec![
+            Family { name: "random".into(), doc: "Uniform random valid parent; spends the whole budget. This is random tree exploration, not uniform sampling of parameter space.".into(), grid: vec![], kind: Kind::Random },
             Family { name: "refine_best".into(), doc: "pi_0, hand-written: always continue the best attempt so far and spend the whole budget.".into(), grid: vec![], kind: Kind::RefineBest },
             Family {
                 name: "ucb".into(),
@@ -147,10 +151,15 @@ impl Registry {
 
     /// Register an external policy family: `command` speaks the JSON-lines protocol of [`External`].
     pub fn add_external(&mut self, name: &str, command: &str, grid: Grid, doc: &str) -> Result<()> {
+        self.add_external_with_timeout(name, command, grid, doc, 10.0)
+    }
+
+    pub fn add_external_with_timeout(&mut self, name: &str, command: &str, grid: Grid, doc: &str, timeout: f64) -> Result<()> {
         if self.get(name).is_some() {
             bail!("policy family {name:?} already exists");
         }
-        let ext = Rc::new(RefCell::new(External { command: command.into(), proc: None, failed: false }));
+        anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "external policy timeout must be finite, positive and below 1e9 seconds");
+        let ext = Rc::new(RefCell::new(External { command: command.into(), proc: None, timeout: Duration::from_secs_f64(timeout) }));
         self.families.push(Family { name: name.into(), doc: doc.into(), grid, kind: Kind::External(ext) });
         Ok(())
     }
@@ -237,10 +246,31 @@ impl Policy {
         t.stalled(self.p("eps", 0.0)) as f64 >= self.p("patience", INF)
     }
 
+    /// A floor on proposals; if a policy stops early, continue the best node.
+    pub fn set_min_calls(&mut self, n: usize) {
+        self.params.retain(|(k, _)| k != "min_calls");
+        if n > 0 { self.params.push(("min_calls".into(), Param::Num(n as f64))); }
+    }
+
     /// Which node to continue next, or None to end the round.
-    pub fn select(&mut self, t: &Tree) -> Option<usize> {
+    pub fn select(&mut self, t: &Tree) -> Result<Option<usize>> {
+        let selected = match &self.kind {
+            Kind::External(ext) => ext.borrow_mut().select(&self.spec(), self.seed, t)?,
+            _ => self.choose(t),
+        };
+        if selected.is_none() && t.calls() < self.p("min_calls", 0.0) as usize {
+            return Ok(t.best().map(|n| n.id));
+        }
+        Ok(selected)
+    }
+
+    fn choose(&mut self, t: &Tree) -> Option<usize> {
         let sc = |n: &crate::tree::Node| n.score.unwrap();
         match &self.kind {
+            Kind::Random => {
+                let ids: Vec<usize> = self.candidates(t).iter().map(|n| n.id).collect();
+                if ids.is_empty() { None } else { Some(*self.rng.choose(&ids)) }
+            }
             Kind::RefineBest => {
                 let c = self.candidates(t);
                 // best score; ties -> newest
@@ -276,11 +306,7 @@ impl Policy {
                 Some(c[self.rng.weighted(&w)].id)
             }
             Kind::Repair => self.select_repair(t),
-            Kind::External(ext) => {
-                let ext = ext.clone();
-                let mut e = ext.borrow_mut();
-                e.select(&self.spec(), self.seed, t)
-            }
+            Kind::External(_) => unreachable!("external policy handled by select"),
         }
     }
 
@@ -349,70 +375,91 @@ impl Policy {
 /// (a bare value or `{"select": ...}`). It must be deterministic given its
 /// input, or replay cannot reproduce live rounds.
 #[derive(Debug)]
+struct Process {
+    child: Child,
+    requests: Sender<Value>,
+    responses: Receiver<std::result::Result<Option<usize>, String>>,
+}
+
+#[derive(Debug)]
 pub struct External {
     command: String,
-    proc: Option<(Child, ChildStdin, BufReader<ChildStdout>)>,
-    failed: bool,
+    proc: Option<Process>,
+    timeout: Duration,
 }
 
 impl External {
     fn start(&mut self) -> Result<()> {
-        let mut child = crate::agents::sh_command(&self.command).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().with_context(|| format!("starting policy {:?}", self.command))?;
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        self.proc = Some((child, stdin, stdout));
+        let mut cmd = crate::agents::sh_command(&self.command);
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+        crate::agents::own_process_group(&mut cmd);
+        let mut child = cmd.spawn().with_context(|| format!("starting policy {:?}", self.command))?;
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let (requests, incoming) = mpsc::channel::<Value>();
+        let (outgoing, responses) = mpsc::channel();
+        // Both writing a request and reading a reply can block. The caller
+        // enforces one deadline, kills the process group, and closes the pipes.
+        std::thread::spawn(move || {
+            for req in incoming {
+                let reply = (|| -> Result<Option<usize>> {
+                    writeln!(stdin, "{req}")?;
+                    stdin.flush()?;
+                    let mut line = String::new();
+                    let size = (&mut stdout).take(1_048_577).read_line(&mut line)?;
+                    anyhow::ensure!(size > 0, "policy closed its output");
+                    anyhow::ensure!(size <= 1_048_576, "policy reply exceeds 1 MiB");
+                    let v: Value = serde_json::from_str(line.trim()).with_context(|| format!("policy replied {:?}", line.chars().take(200).collect::<String>()))?;
+                    let v = v.get("select").unwrap_or(&v);
+                    if v.is_null() { return Ok(None); }
+                    let id = v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| anyhow!("policy reply must be a node id or null"))?;
+                    Ok(Some(id))
+                })();
+                let failed = reply.is_err();
+                if outgoing.send(reply.map_err(|e| format!("{e:#}"))).is_err() || failed { break; }
+            }
+        });
+        self.proc = Some(Process { child, requests, responses });
         Ok(())
     }
 
-    fn ask(&mut self, req: &Value) -> Result<Option<usize>> {
-        if self.proc.is_none() {
-            self.start()?;
+    fn stop(&mut self) {
+        if let Some(mut p) = self.proc.take() {
+            crate::agents::kill_tree(&p.child);
+            let _ = p.child.kill();
+            let _ = p.child.wait();
         }
-        let (_, stdin, stdout) = self.proc.as_mut().unwrap();
-        writeln!(stdin, "{req}")?;
-        stdin.flush()?;
-        let mut line = String::new();
-        if stdout.read_line(&mut line)? == 0 {
-            bail!("policy {:?} closed its output", self.command);
-        }
-        let v: Value = serde_json::from_str(line.trim()).with_context(|| format!("policy {:?} replied {line:?}", self.command))?;
-        let v = v.get("select").cloned().unwrap_or(v);
-        Ok(v.as_u64().map(|x| x as usize))
     }
 
-    fn select(&mut self, spec: &Value, seed: u64, t: &Tree) -> Option<usize> {
-        if self.failed {
-            return None;
+    fn ask(&mut self, req: Value) -> Result<Option<usize>> {
+        if self.proc.is_none() { self.start()?; }
+        let p = self.proc.as_mut().unwrap();
+        p.requests.send(req).context("policy request channel closed")?;
+        let res = p.responses.recv_timeout(self.timeout);
+        match res {
+            Ok(Ok(id)) => Ok(id),
+            Ok(Err(err)) => { self.stop(); bail!("policy {:?}: {err}", self.command); }
+            Err(err) => { self.stop(); bail!("policy {:?} reply deadline/channel failure: {err}", self.command); }
         }
+    }
+
+    fn select(&mut self, spec: &Value, seed: u64, t: &Tree) -> Result<Option<usize>> {
         let nodes: Vec<Value> = t
             .nodes
             .iter()
             .map(|n| json!({"id": n.id, "parent": n.parent, "k": n.k, "design": n.design, "score": n.score, "status": n.status, "change": n.change, "n_exp": n.n_exp}))
             .collect();
         let req = json!({"params": spec["params"], "seed": seed, "tree": {"run": t.run, "round": t.round, "goal": t.goal.as_str(), "budget": t.budget, "calls": t.calls(), "nodes": nodes}});
-        match self.ask(&req) {
-            Ok(Some(id)) if id < t.nodes.len() => Some(id),
-            Ok(Some(id)) => {
-                eprintln!("git dream: policy {:?} selected unknown node {id}; ending the round", self.command);
-                None
-            }
-            Ok(None) => None,
-            Err(e) => {
-                eprintln!("git dream: {e:#}; policy disabled");
-                self.failed = true;
-                None
-            }
+        let selected = self.ask(req)?;
+        if let Some(id) = selected {
+            anyhow::ensure!(id < t.nodes.len(), "policy {:?} selected unknown node {id}", self.command);
         }
+        Ok(selected)
     }
 }
 
 impl Drop for External {
-    fn drop(&mut self) {
-        if let Some((mut child, stdin, _)) = self.proc.take() {
-            drop(stdin);
-            let _ = child.wait();
-        }
-    }
+    fn drop(&mut self) { self.stop(); }
 }
 
 #[cfg(test)]

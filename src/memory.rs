@@ -301,7 +301,10 @@ impl Memory {
         }
         let mut t = Tree::new(run, round, meta.get("Budget").and_then(|b| b.parse().ok()).unwrap_or(0), Goal::parse(meta.get("Goal").map_or("min", |s| s)), meta.get("Policy").map_or("", |s| s));
         for i in 0..nodes.len() {
+            anyhow::ensure!(nodes[i].score.is_none_or(f64::is_finite), "non-finite score in round {round} node {i}");
+            anyhow::ensure!((i == 0) == nodes[i].parent.is_none(), "invalid root/parent in round {round} node {i}");
             if let Some(p) = nodes[i].parent {
+                anyhow::ensure!(p < i, "invalid parent {p} in round {round} node {i}");
                 nodes[p].n_exp += 1;
             }
         }

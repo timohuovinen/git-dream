@@ -1,0 +1,19 @@
+[agent]
+kind = "command"
+command = "python3 agent.py"
+prompt = "Speed up log aggregation while preserving the evaluator's correctness contract."
+
+[evaluate]
+command = "python3 eval.py"
+goal = "min"
+protected = ["eval.py", "tests.rs", "bench.rs", "agent.py", "candidates"]
+confirm_top = 2
+confirm_reps = 3
+remeasure_root = true
+
+[explore]
+budget = 3
+
+[dream]
+mode = "strict"
+holdout = 1

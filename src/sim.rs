@@ -12,8 +12,9 @@
 //!     and any earlier measurement of the same design is reused (optionally
 //!     rescaled by the replayed tree's root to absorb machine drift).
 //!
-//!   A MISS is charged as a call and is a dead end, so a dreamt policy can
-//!   never profit from leaving the region history actually explored.
+//!   A MISS is charged as a call and is a dead end. This is a pessimistic
+//!   surrogate, not an unbiased estimate of an unobserved outcome: policies
+//!   that stay on recorded paths or stop early can still be favored.
 
 use crate::agents::SpaceAgent;
 use crate::policies::{Family, Policy, Registry};
@@ -145,7 +146,7 @@ pub fn run_tree(policy: &mut Policy, world: &mut dyn World, root: &Node, budget:
     t.set_root(r);
     policy.reset(seed);
     while t.calls() < budget {
-        let Some(nid) = policy.select(&t) else { break };
+        let Some(nid) = policy.select(&t)? else { break };
         let k = t.nodes[nid].n_exp;
         t.nodes[nid].n_exp += 1;
         let n = world.step(&t, nid, k)?;
@@ -181,6 +182,8 @@ pub fn objective(trees: &[Tree], budget: usize, lam: f64) -> f64 {
 
 #[allow(clippy::too_many_arguments)]
 pub fn replay(policy: &Policy, history: &[Tree], budget: usize, lam: f64, agent: Option<&SpaceAgent>, mode: Mode, normalize_root: bool, keep_trees: bool) -> Result<ReplayResult> {
+    anyhow::ensure!(budget > 0, "replay budget must be positive");
+    anyhow::ensure!(lam.is_finite() && lam >= 0.0, "lam must be finite and nonnegative");
     let mut w = ReplayWorld::new(history, agent, mode, normalize_root);
     let mut trees = vec![];
     for rt in history.iter().filter(|t| t.root().score.is_some()) {
@@ -199,6 +202,7 @@ pub struct DreamArgs<'a> {
     pub budget: usize,
     pub lam: f64,
     pub candidates: usize,
+    pub min_calls: usize,
     pub seed: u64,
     pub agent: Option<&'a SpaceAgent>,
     pub mode: Mode,
@@ -221,12 +225,33 @@ pub fn dream(current: &Policy, extra: &[Policy], a: &DreamArgs) -> Result<Vec<(P
         }
     }
     let mut scored = vec![];
-    for (i, c) in cands.into_iter().enumerate() {
+    let mut seen = std::collections::HashSet::new();
+    for (i, mut c) in cands.into_iter().enumerate() {
+        c.set_min_calls(a.min_calls);
+        if !seen.insert(c.repr()) { continue; }
         let r = replay(&c, a.history, a.budget, a.lam, a.agent, a.mode, a.normalize_root, false)?;
         scored.push((i, c, r));
     }
     scored.sort_by(|x, y| y.2.j.total_cmp(&x.2.j).then(x.0.cmp(&y.0)));
     Ok(scored.into_iter().map(|(_, c, r)| (c, r)).collect())
+}
+
+/// Reserve the last `holdout` rounds of each run. Neither partition's cache
+/// contains measurements from the other partition. This diagnoses overfitting;
+/// it does not identify outcomes outside the behavior policies' support.
+pub fn split_history(history: &[Tree], holdout: usize) -> Result<(Vec<Tree>, Vec<Tree>)> {
+    anyhow::ensure!(holdout > 0, "holdout must be positive");
+    let mut runs: std::collections::BTreeMap<&str, Vec<&Tree>> = std::collections::BTreeMap::new();
+    for t in history { runs.entry(&t.run).or_default().push(t); }
+    let (mut train, mut test) = (vec![], vec![]);
+    for rounds in runs.values_mut() {
+        rounds.sort_by_key(|t| t.round);
+        let split = rounds.len().saturating_sub(holdout);
+        train.extend(rounds[..split].iter().map(|t| (*t).clone()));
+        test.extend(rounds[split..].iter().map(|t| (*t).clone()));
+    }
+    anyhow::ensure!(!train.is_empty() && !test.is_empty(), "need more than {holdout} recorded rounds in at least one run for held-out replay");
+    Ok((train, test))
 }
 
 #[cfg(test)]
@@ -242,6 +267,28 @@ mod tests {
             let s = 1.0 + (q[0] as f64 - 7.0).powi(2) + (q[1] as f64 - 3.0).powi(2);
             Ok(Node::new(t.nodes.len(), Some(parent), Some(k), d, Some(s), OK, ch))
         }
+    }
+
+    #[test]
+    fn holdout_has_no_cross_partition_cache() {
+        let mut history = vec![];
+        for run in ["a", "b"] {
+            for round in [3, 1, 2] {
+                let mut t = Tree::new(run, round, 4, Goal::Min, "");
+                t.set_root(Node::new(0, None, None, "root", Some(10.0), OK, ""));
+                t.add(Node::new(1, Some(0), Some(0), format!("{run}-{round}"), Some(round as f64), OK, ""));
+                history.push(t);
+            }
+        }
+        let (train, test) = split_history(&history, 1).unwrap();
+        assert_eq!(train.len(), 4);
+        assert!(train.iter().all(|t| t.round < 3));
+        assert!(test.iter().all(|t| t.round == 3));
+        let w = ReplayWorld::new(&train, None, Mode::Strict, false);
+        assert!(!w.scores.contains_key("a-3"));
+        assert!(!w.scores.contains_key("b-3"));
+        assert!(split_history(&history, 3).is_err());
+        assert!(split_history(&history, 0).is_err());
     }
 
     #[test]
@@ -266,7 +313,7 @@ mod tests {
         }
         let cur = reg.make(&serde_json::json!({"family": "refine_best"})).unwrap();
         let fams = reg.searchable(&[]);
-        let a = DreamArgs { history: &hist, budget: 15, lam: 0.02, candidates: 60, seed: 0, agent: Some(&agent), mode: Mode::Cache, normalize_root: false, registry: &reg, families: &fams };
+        let a = DreamArgs { history: &hist, budget: 15, lam: 0.02, candidates: 60, min_calls: 0, seed: 0, agent: Some(&agent), mode: Mode::Cache, normalize_root: false, registry: &reg, families: &fams };
         let ranking = dream(&cur, &[], &a).unwrap();
         let jcur = ranking.iter().find(|(c, _)| c.repr() == cur.repr()).unwrap().1.j;
         assert!(ranking[0].1.j >= jcur);
