@@ -129,6 +129,14 @@ Ignored build outputs (e.g. `target/`) survive between attempts in the scratch w
 | best attempt | branch `dream/<run>/best` (per round: `refs/dream/<run>/rNN/best`) |
 | exploration policy | branch `dream/<run>/policy`: one commit per round (`policy.json` with the dream's ranking, the config, external policy sources), tags `dream/<run>/policy-rNN` |
 
+Attempts are written with plumbing commands (`hash-object`, `commit-tree`, `update-ref`), which never trigger git's automatic `gc`. Left alone, every attempt would keep a full compressed copy of each file it changed. So after each round git-dream runs `git repack -d`, which packs that round's attempts into one pack, storing near-identical versions as deltas, and every `gc_every` rounds it runs `git gc` to merge those packs:
+
+```toml
+[storage]
+repack = true      # default
+gc_every = 10      # default; 0 = never
+```
+
 The trees are rebuilt from commit trailers before every dream, so the repository *is* the state. `.git/dream/` only holds scratch worktrees and can be deleted at any time. Hidden refs aren't pushed by default; `git dream push [remote]` / `git dream fetch [remote]` share runs.
 
 ## Commands

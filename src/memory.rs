@@ -350,6 +350,20 @@ impl Memory {
     }
 
     // ---- maintenance -------------------------------------------------------------------------
+    /// Move loose objects into one new pack (deltas within it) and delete them.
+    /// Plumbing never triggers auto-gc, so without this every attempt keeps a
+    /// full compressed copy of each file it changed.
+    pub fn repack(&self) -> Result<()> {
+        self.git(&["repack", "-d", "-q"])?;
+        Ok(())
+    }
+
+    /// Full `git gc`: merges the per-round packs (deltas across rounds).
+    pub fn gc(&self) -> Result<()> {
+        self.git(&["gc", "-q"])?;
+        Ok(())
+    }
+
     pub fn delete_run(&self, run: &str) -> Result<usize> {
         check_run(run)?;
         let mut refs = vec![];

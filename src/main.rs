@@ -50,6 +50,10 @@ families = []                     # restrict the dream search (default: all sear
 # [policies.external.patient]
 # command = "./target/release/patient-policy"
 # grid = { p = [3, 5, 8] }
+
+[storage]
+repack = true                     # pack each round's attempts into one pack (deltas instead of full copies)
+gc_every = 10                     # every N rounds also run `git gc` to merge the packs (0 = never)
 "#;
 
 const TEMPLATE_COMMAND: &str = r#"# git-dream configuration (https://github.com/timohuovinen/git-dream)
@@ -83,6 +87,10 @@ mode = "strict"                   # stochastic agent: only recorded edges can be
 
 [policies]
 initial = { family = "refine_best" }
+
+[storage]
+repack = true                     # pack each round's attempts into one pack (deltas instead of full copies)
+gc_every = 10                     # every N rounds also run `git gc` to merge the packs (0 = never)
 "#;
 
 #[derive(Parser)]
