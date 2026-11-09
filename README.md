@@ -41,6 +41,8 @@ It needs git ≥ 2.31 and `sh` at run time. The examples use only `sh` and `awk`
 
 **Releasing:** bump `version` in `Cargo.toml`, commit, then `git tag v0.2.1 && git push origin v0.2.1`. [.github/workflows/release.yml](.github/workflows/release.yml) builds the three binaries and publishes the release with `SHA256SUMS`.
 
+Existing users: see [configuration and behavior changes](docs/compatibility.md), especially the default held-out gate and confirmation accounting.
+
 ## Quick start (seconds)
 
 ```bash
@@ -166,9 +168,9 @@ The trees are rebuilt from commit trailers before every dream, so the repository
 | `git dream push` / `fetch [REMOTE]` | share dream refs |
 | `git dream clean --run NAME --yes` | delete a run |
 
-All commands take `--run NAME` and `--config FILE`. Runs are independent by default, e.g. `--run baseline --no-dream` against `--run dream`.
+Run-oriented commands take `--run NAME` and `--config FILE`. Runs are independent by default, e.g. `--run baseline --no-dream` against `--run dream`.
 
-A run is one discovery process, the paper's history H: what dreaming replays and what each agent reads is that run's rounds. That keeps a comparison fair, since a baseline that reads the other arm's attempts is no longer a baseline. To pool knowledge instead, set `[dream] history = "all"`. Every run's recorded rounds then feed both dreaming and the agents' history file, with each attempt labelled by its run. It's one setting because the paper has one history. Nothing is copied between runs: the history is read from the runs' refs, and `git show` works across them.
+A run is one discovery process, the paper's history H: what dreaming replays and what each agent reads is that run's rounds. That keeps a comparison fair, since a baseline that reads the other arm's attempts is no longer a baseline. To pool knowledge instead, set `[dream] history = "all"`. Recorded rounds then feed both dreaming and the agents' history file, with each attempt labelled by its run. Replay requires matching agent/evaluator configurations and base commits. It's one setting because the paper has one history. Nothing is copied between runs: the history is read from the runs' refs, and `git show` works across them.
 
 ## Policies
 
@@ -226,7 +228,7 @@ A good prompt for the meta-agent: *"Read `git dream status`, `git dream show` fo
 ## Does it work?
 
 - **[Prospective synthetic comparison](docs/validation.md):** 100 fresh seeds on each of three landscapes, ten methods, 97 objective evaluations per fixed-budget method. Guarded adaptive search matched fixed refinement's final quality; it did not demonstrate a quality advantage. Multi-start successive halving performed better on these tasks. A separate stopping arm saved calls on some tasks. All traces and paired intervals are included.
-- **[Inspectable coding example](docs/case-study-log-count.md):** a session-authored Rust optimization changed linear key lookup to hash aggregation. Fresh confirmation means were 25.16 ms before and 1.16 ms after on the included fixture. A deliberate incorrect control failed. The full Git history, notes and policy are bundled. The adapter replays supplied candidates; this is not an autonomous LLM search or evidence for adaptive policy superiority.
+- **[Inspectable coding example](docs/case-study-log-count.md):** a supplied Rust optimization changed linear key lookup to hash aggregation. Fresh confirmation means were 25.16 ms before and 1.16 ms after on the included fixture. A deliberate incorrect control failed. The full Git history, notes and policy are bundled. The adapter replays supplied candidates; this is not an autonomous LLM search or evidence for adaptive policy superiority.
 
 Earlier evidence (different prototype/configurations, not rerun under the new gate):
 

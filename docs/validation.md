@@ -13,7 +13,7 @@ cargo run --release --locked --example compare -- --seeds 100 --first-seed 10000
 python3 research/validation/summarize.py results.jsonl
 ```
 
-[Source](../examples/compare.rs), [raw traces](../research/validation/results.jsonl), [all paired comparisons](../research/validation/summary.md).
+[Source](../examples/compare.rs), [source hashes and run provenance](../research/validation/provenance.json), [raw traces](../research/validation/results.jsonl), [all paired comparisons](../research/validation/summary.md).
 
 ## What was compared
 
