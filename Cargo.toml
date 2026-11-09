@@ -1,6 +1,6 @@
 [package]
 name = "git-dream"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "Dream-RSI on git: improve how a search explores a repository, using git commits as the experiment memory"
