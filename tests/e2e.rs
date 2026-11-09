@@ -151,6 +151,28 @@ fn agent_sees_whole_history() {
 }
 
 #[test]
+fn history_all_pools_runs() {
+    let agent = r#"command = 'cp "$DREAM_CONTEXT" "$DREAM_WORKTREE/../history-$DREAM_RUN.md" && ./agent.sh'"#;
+    let eval = r#"command = 'if [ "$DREAM_RUN" = a ] && [ "$DREAM_NODE" -ge 2 ]; then echo "only-in-run-a" >&2; exit 3; fi; ./bench.sh'"#;
+    let r = repo("toy-command", "pool", |s| s.replace("budget = 12", "budget = 3").replace("command = \"./agent.sh\"", agent).replace("command = \"./bench.sh\"", eval));
+    open(&r, Some("a")).rounds(1, false, None, None, None).unwrap();
+    // default: runs don't see each other
+    open(&r, Some("b")).rounds(1, false, None, None, None).unwrap();
+    let wt = r.0.join(".git/dream/wt");
+    let b = std::fs::read_to_string(wt.join("history-b.md")).unwrap();
+    assert!(!b.contains("only-in-run-a") && b.contains("## Round 1"), "{b}");
+    // history = "all": run b reads run a's attempts, labelled by run, before its own
+    let cfg = r.0.join(".git-dream.toml");
+    std::fs::write(&cfg, std::fs::read_to_string(&cfg).unwrap().replace("[dream]\n", "[dream]\nhistory = \"all\"\n")).unwrap();
+    open(&r, Some("b")).rounds(1, false, None, None, None).unwrap();
+    let b = std::fs::read_to_string(wt.join("history-b.md")).unwrap();
+    for want in ["only-in-run-a", "other run `a` in", "## Run a, round 1", "### a r01 n002", "### b r02 n000"] {
+        assert!(b.contains(want), "history lacks {want:?}:\n{b}");
+    }
+    assert!(b.find("## Run a, round 1") < b.find("## Run b, round 1"));
+}
+
+#[test]
 fn noop_attempts() {
     let r = repo("toy-command", "noop", |s| s.replace("command = \"./agent.sh\"", "command = \"test $DREAM_K = 0 || ./agent.sh\"").replace("budget = 12", "budget = 4"));
     let t = open(&r, None).rounds(1, false, None, None, None).unwrap().remove(0);
