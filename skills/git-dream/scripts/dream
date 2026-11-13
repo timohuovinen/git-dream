@@ -1,0 +1,218 @@
+#!/bin/sh
+# dream: set up, launch and watch git-dream runs from inside any coding-agent harness.
+# Run state lives in <git-common-dir>/dream-runs/<run>/ (config.toml, log, pid), so the
+# user's branch and working tree are never touched. See ../SKILL.md.
+set -eu
+
+die() { echo "dream: $*" >&2; exit 1; }
+usage() {
+  cat <<'EOF'
+usage: dream <command> [args]
+  harness                         print the detected harness (opencode|claude|codex|gemini)
+  new RUN [--harness H]           create a run config wired to the current harness; prints its path
+  check RUN                       run the evaluator once on HEAD in a throwaway worktree
+  start RUN [-n ROUNDS]           launch `git-dream run` detached (survives this session); default 3 rounds
+  status [RUN]                    one run's progress, or all runs in this repo
+  log RUN [LINES]                 tail the run's log
+  stop RUN                        stop a running run (its recorded attempts stay)
+EOF
+  exit "${1:-0}"
+}
+
+need_repo() { git rev-parse --show-toplevel >/dev/null 2>&1 || die "not inside a git repository"; }
+top() { git rev-parse --show-toplevel; }
+runs_dir() { echo "$(cd "$(git rev-parse --git-common-dir)" && pwd)/dream-runs"; }
+gd() { command -v git-dream >/dev/null 2>&1 || die "git-dream not on PATH (see SKILL.md: Install)"; git-dream "$@"; }
+valid_run() { case $1 in ''|*[!A-Za-z0-9._-]*) die "run name must match [A-Za-z0-9._-]+";; esac; }
+
+detect() {
+  p=$$
+  while [ "${p:-1}" -gt 1 ]; do
+    c=$(ps -o comm= -p "$p" 2>/dev/null) || break
+    case $c in
+      opencode*|.opencode*) echo opencode; return ;;
+      claude*) echo claude; return ;;
+      codex*) echo codex; return ;;
+      gemini*) echo gemini; return ;;
+    esac
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  done
+  if [ -n "${OPENCODE:-}${OPENCODE_CLIENT:-}" ]; then echo opencode
+  elif [ -n "${CLAUDECODE:-}" ]; then echo claude
+  elif env | grep -q '^CODEX_'; then echo codex
+  elif [ -n "${GEMINI_CLI:-}" ]; then echo gemini
+  else echo unknown; fi
+}
+
+# Headless, auto-approving invocation of each harness inside git-dream's scratch worktree.
+# Values are TOML literal strings, so they must not contain single quotes.
+agent_cmd() {
+  case $1 in
+    opencode) echo 'opencode run --auto --archived --title "dream $DREAM_RUN r$DREAM_ROUND" "$DREAM_PROMPT"' ;;
+    claude) echo 'claude -p "$DREAM_PROMPT" --permission-mode acceptEdits --allowedTools Bash' ;;
+    codex) echo 'codex exec --full-auto "$DREAM_PROMPT"' ;;
+    gemini) echo 'gemini --yolo -p "$DREAM_PROMPT"' ;;
+    *) die "unknown harness '$1': pass --harness opencode|claude|codex|gemini" ;;
+  esac
+}
+
+toml_get() { # file dotted.key -> value (strings printed raw)
+  python3 -I -c 'import sys, tomllib
+v = tomllib.load(open(sys.argv[1], "rb"))
+for k in sys.argv[2].split("."): v = v.get(k, "") if isinstance(v, dict) else ""
+print(v)' "$1" "$2"
+}
+
+is_running() { [ -f "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null; }
+
+cmd_new() {
+  run=${1:-}; valid_run "$run"; shift
+  h=
+  while [ $# -gt 0 ]; do case $1 in --harness) h=$2; shift 2 ;; *) usage 2 ;; esac; done
+  [ -n "$h" ] || h=$(detect)
+  cmd=$(agent_cmd "$h")
+  d=$(runs_dir)/$run
+  [ -e "$d/config.toml" ] && die "$d/config.toml exists"
+  mkdir -p "$d"
+  case $h in opencode) to=21600 ;; *) to=3600 ;; esac   # local models are slow
+  cat > "$d/config.toml" <<EOF
+# git-dream run "$run" (harness: $h). Created by \`dream new\`; edit every TODO.
+run = "$run"
+
+[agent]
+kind = "command"
+command = '$cmd'
+prompt = """
+TODO: the goal in one or two sentences, what must keep working, and
+"Make one focused change per attempt."
+"""
+timeout = $to            # seconds per attempt
+
+[evaluate]
+# Runs in the attempt's worktree. LAST stdout line = score (number or {"score": N, "status": "ok"}).
+# Run correctness checks first so broken attempts fail: e.g. "cargo test -q >/dev/null 2>&1 && ./bench.sh"
+command = "TODO"
+goal = "min"             # or "max"
+timeout = 1800
+protected = []           # TODO: tests, benchmark scripts, fixtures the agent must not edit
+# remeasure_root = true  # noisy metrics (timings): re-measure the incumbent each round
+# confirm_top = 2        # noisy metrics: re-run the top candidates before promoting
+
+[explore]
+budget = 4               # attempts per round
+min_calls = 2
+
+[dream]
+mode = "strict"          # LLM agents are stochastic: only recorded edges replay
+holdout = 1
+EOF
+  echo "$d/config.toml"
+}
+
+cmd_check() {
+  run=${1:-}; valid_run "$run"
+  d=$(runs_dir)/$run; cfg=$d/config.toml
+  [ -f "$cfg" ] || die "no run '$run' (dream new $run)"
+  grep -q '^[^#]*TODO' "$cfg" && die "$cfg still has TODOs"
+  ev=$(toml_get "$cfg" evaluate.command)
+  [ -z "$(git status --porcelain --untracked-files=no)" ] ||
+    echo "dream: warning: uncommitted changes are NOT part of the run; it starts from HEAD $(git rev-parse --short HEAD)" >&2
+  wt=$d/check
+  git worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+  git worktree add -q --detach "$wt" HEAD
+  set +e
+  out=$(cd "$wt" && sh -c "$ev" 2>"$d/check.stderr"); rc=$?
+  set -e
+  git worktree remove --force "$wt"
+  last=$(printf '%s\n' "$out" | tail -n 1)
+  echo "exit: $rc"
+  echo "last line: $last"
+  [ $rc -eq 0 ] || { echo "stderr tail:"; tail -n 20 "$d/check.stderr"; die "evaluator failed on HEAD"; }
+  printf '%s' "$last" | python3 -I -c 'import json, sys
+s = sys.stdin.read().strip()
+try: v = float(s)
+except ValueError: v = json.loads(s)["score"]
+assert v is not None and float(v) == float(v), "score is null/NaN"
+print("score on HEAD:", v)' || die "last stdout line is not a number or {\"score\": N}"
+}
+
+cmd_start() {
+  run=${1:-}; valid_run "$run"; shift
+  n=3
+  while [ $# -gt 0 ]; do case $1 in -n) n=$2; shift 2 ;; *) usage 2 ;; esac; done
+  d=$(runs_dir)/$run; cfg=$d/config.toml
+  [ -f "$cfg" ] || die "no run '$run' (dream new $run)"
+  grep -q '^[^#]*TODO' "$cfg" && die "$cfg still has TODOs"
+  is_running "$d" && die "run '$run' is already running (pid $(cat "$d/pid"))"
+  command -v git-dream >/dev/null 2>&1 || die "git-dream not on PATH"
+  t=$(top)
+  # Strip the launching harness's session variables so nested agents start clean sessions.
+  unset_args=$(env | sed -n 's/^\(CLAUDECODE\|CLAUDE_CODE_[A-Z_]*\|CLAUDE_PID\|CLAUDE_EFFORT\|OPENCODE\|OPENCODE_CLIENT\|OPENCODE_SERVER[A-Z_]*\|CODEX_SANDBOX[A-Z_]*\|CODEX_THREAD_ID\)=.*/-u \1/p' | tr '\n' ' ')
+  echo "=== $(date -Is) start: git-dream run -n $n --config $cfg (HEAD $(git rev-parse --short HEAD))" >> "$d/log"
+  # setsid: own session, so it outlives this agent session and `stop` can kill the whole tree.
+  # shellcheck disable=SC2086
+  rm -f "$d/pid"
+  # The inner sh is the session leader: its pid is the session id that `stop` kills.
+  (cd "$t" && env $unset_args setsid -f nohup sh -c 'echo $$ > "$3"; git-dream run -n "$1" --config "$2"; echo "=== $(date -Is) exit $?"' \
+     sh "$n" "$cfg" "$d/pid" >> "$d/log" 2>&1 < /dev/null)
+  i=0; while [ ! -s "$d/pid" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  sleep 1
+  if ! is_running "$d"; then
+    tail -n 20 "$d/log"
+    tail -n 1 "$d/log" | grep -q 'exit 0$' || die "run failed immediately"
+    echo "run '$run' already finished. Log: $d/log"; return
+  fi
+  echo "started '$run' (pid $(cat "$d/pid")), $n rounds. Log: $d/log"
+  echo "check with: dream status $run"
+}
+
+cmd_status() {
+  need_repo
+  if [ $# -eq 0 ]; then
+    rd=$(runs_dir); [ -d "$rd" ] || { echo "no dream runs in this repo"; return; }
+    for d in "$rd"/*/; do
+      d=${d%/}; [ -f "$d/config.toml" ] || continue
+      r=$(basename "$d"); st=stopped; is_running "$d" && st="running (pid $(cat "$d/pid"))"
+      echo "$r: $st"
+    done
+    return
+  fi
+  run=$1; valid_run "$run"; d=$(runs_dir)/$run
+  [ -f "$d/config.toml" ] || die "no run '$run'"
+  if is_running "$d"; then echo "state: running (pid $(cat "$d/pid"))"
+  else echo "state: not running ($(grep -E '^=== .* (exit [0-9]+|stopped)$' "$d/log" 2>/dev/null | tail -n 1 | sed 's/^=== //' || true))"; fi
+  [ -f "$d/log" ] && { echo "--- log tail"; tail -n 8 "$d/log"; }
+  echo "--- git-dream status"
+  gd status --config "$d/config.toml" --run "$run" 2>&1 || true
+}
+
+cmd_log() {
+  run=${1:-}; valid_run "$run"; d=$(runs_dir)/$run
+  [ -f "$d/log" ] || die "no log for '$run'"
+  tail -n "${2:-60}" "$d/log"
+}
+
+cmd_stop() {
+  run=${1:-}; valid_run "$run"; d=$(runs_dir)/$run
+  is_running "$d" || die "run '$run' is not running"
+  pid=$(cat "$d/pid")
+  pkill -TERM -s "$pid" 2>/dev/null || kill -TERM "$pid"
+  echo "=== $(date -Is) stopped" >> "$d/log"
+  echo "stopped '$run'. Recorded attempts remain: git-dream status --run $run --config $d/config.toml"
+  echo "note: git-dream cannot continue a run stopped mid-round (\"round N has no promoted attempt\");"
+  echo "      start a new run name to keep searching. Finished rounds and dream/$run/best are kept."
+}
+
+[ $# -ge 1 ] || usage 2
+c=$1; shift
+case $c in
+  harness) detect ;;
+  new) need_repo; cmd_new "$@" ;;
+  check) need_repo; cmd_check "$@" ;;
+  start) need_repo; cmd_start "$@" ;;
+  status) cmd_status "$@" ;;
+  log) need_repo; cmd_log "$@" ;;
+  stop) need_repo; cmd_stop "$@" ;;
+  -h|--help|help) usage 0 ;;
+  *) usage 2 ;;
+esac

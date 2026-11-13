@@ -29,7 +29,7 @@ tar xzf git-dream-*.tar.gz && install git-dream-*/git-dream ~/.local/bin/   # th
 ```sh
 git clone git@github.com:timohuovinen/git-dream.git git-dream-meta   # dedicated clone
 cd git-dream-meta
-sh meta/setup.sh                              # pinned release binary (sha256-checked) + speed reference
+sh meta/setup.sh                              # pinned binary from this commit + speed reference
 git add meta && git commit -m "meta: speed reference"
 export OPENCODE_MODEL=strata/<your-model>     # optional; otherwise opencode's default
 G=~/.local/git-dream-pinned/bin/git-dream     # NOT the code under edit
