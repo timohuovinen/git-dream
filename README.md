@@ -41,6 +41,8 @@ It needs git ≥ 2.31 and `sh` at run time. The examples use only `sh` and `awk`
 
 **Releasing:** bump `version` in `Cargo.toml`, commit, then `git tag v0.2.1 && git push origin v0.2.1`. [.github/workflows/release.yml](.github/workflows/release.yml) builds the three binaries and publishes the release with `SHA256SUMS`.
 
+**Coding-agent skill:** [skills/git-dream](skills/git-dream/SKILL.md) lets opencode, Claude Code, Codex or Gemini handle "dream up X" in any repo. It designs an evaluator with you, then launches a detached run that uses the same agent for attempts (`skills/git-dream/scripts/dream`). Symlink the directory into the agent's skills folder, e.g. `~/.claude/skills/git-dream`, which opencode reads too.
+
 Existing users: see [configuration and behavior changes](docs/compatibility.md), especially the default held-out gate and confirmation accounting.
 
 ## Quick start (seconds)

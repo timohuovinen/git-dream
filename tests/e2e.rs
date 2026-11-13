@@ -389,3 +389,24 @@ done
     assert_eq!(doc["policy"]["family"], "refine_best");
     assert!(doc["validation"]["candidate_J"].as_f64().unwrap() < doc["validation"]["current_J"].as_f64().unwrap());
 }
+
+#[test]
+fn run_killed_mid_round_resumes_from_recorded_attempts() {
+    let r = repo("toy-space", "resume", |s| s.replace("budget = 25", "budget = 6"));
+    let e = open(&r, None);
+    e.rounds(2, false, None, None, None).unwrap();
+    // Simulate a kill after round 2's third attempt: later attempts and the promotion never happened.
+    for i in 4..=6 {
+        let _ = git(&r.0, &["update-ref", "-d", &format!("refs/dream/main/r02/n{i:03}")]);
+    }
+    git(&r.0, &["update-ref", "-d", "refs/dream/main/r02/best"]);
+    let e = open(&r, None);
+    let trees = e.rounds(1, true, None, None, None).unwrap();
+    assert_eq!(trees[0].round, 3);
+    assert_eq!(e.mem.rounds("main").unwrap(), vec![1, 2, 3]);
+    let r2 = e.mem.load_tree("main", 2).unwrap().unwrap();
+    assert_eq!(r2.calls(), 3);
+    let best = git(&r.0, &["rev-parse", "refs/dream/main/r02/best"]);
+    assert_eq!(best, r2.best().unwrap().sha, "interrupted round promotes its best recorded attempt");
+    assert_eq!(git(&r.0, &["rev-parse", &format!("{}^", trees[0].root().sha)]), best, "round 3 continues from it");
+}

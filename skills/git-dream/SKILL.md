@@ -111,11 +111,14 @@ You can tell because `$DREAM_PROMPT`, `$DREAM_CONTEXT` and `$DREAM_MESSAGE_FILE`
 
 ## Install and reference
 
-- The binary must be on PATH as `git-dream`.
-  - Install from releases: `gh release download -R timohuovinen/git-dream -p '*x86_64-unknown-linux-musl.tar.gz'`,
-    then put `git-dream` in `~/.local/bin`.
-  - The newest config keys, such as `protected`, may need a build from source:
-    `cargo install --git https://github.com/timohuovinen/git-dream`.
+- The binary must be on PATH as `git-dream`, at v0.2.2 or later (older versions reject
+  `protected` and can't resume interrupted runs). Install or update it from the latest release:
+  ```sh
+  t=$(mktemp -d) && gh release download -R timohuovinen/git-dream -D "$t" -p '*x86_64-unknown-linux-musl.tar.gz' -p SHA256SUMS \
+    && (cd "$t" && grep x86_64-unknown-linux-musl SHA256SUMS | sha256sum -c -) && tar xzf "$t"/*.tar.gz -C "$t" \
+    && install "$t"/git-dream-*/git-dream ~/.local/bin/ && git dream --version
+  ```
+  (Use `aarch64` on ARM. Without `gh`: `cargo install --git https://github.com/timohuovinen/git-dream`.)
 - Full config reference: the git-dream README (`kind = "space"` for pure parameter search,
   `[dream]` and `[policies]` for the exploration policy).
 - To improve git-dream itself, use `meta/README.md` in the git-dream repo.
