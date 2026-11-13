@@ -1,0 +1,29 @@
+# git-dream improving git-dream: better exploration policies / dream selection.
+# Run with the PINNED binary (see meta/README.md), never the code being edited.
+run = "meta-policy"
+
+[agent]
+kind = "command"
+command = 'opencode run --auto --archived --title "dream $DREAM_RUN" ${OPENCODE_MODEL:+-m "$OPENCODE_MODEL"} "$DREAM_PROMPT"'
+prompt = """
+Track: POLICY. Read AGENTS.md first, then follow its "Policy track" section.
+Goal: lower the mean final regret of the guarded adaptive arms (adaptive_cache,
+adaptive_strict) in examples/compare.rs at the same 97-evaluation budget.
+Make ONE focused, well-motivated change. Run `sh meta/eval-policy.sh` yourself
+before finishing if time allows, and report its numbers in your write-up.
+"""
+timeout = 21600          # 6 h: local model is ~8x slower than hosted; tune to your box
+
+[evaluate]
+command = "sh meta/eval-policy.sh"
+goal = "min"
+timeout = 3600
+protected = ["meta", "examples/compare.rs", "tests", "research", "docs/validation.md", "Cargo.lock"]
+
+[explore]
+budget = 4
+min_calls = 2
+
+[dream]
+mode = "strict"          # LLM agent: only recorded edges replay
+holdout = 1

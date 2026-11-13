@@ -1,4 +1,5 @@
 /target/
 __pycache__/
+/.git-dream-eval/
 # third-party papers: not redistributable, fetch with papers/fetch.sh
 /papers/*.pdf
