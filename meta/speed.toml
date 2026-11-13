@@ -1,0 +1,30 @@
+# git-dream improving git-dream: same behaviour, faster (replay, dream, trees, policies).
+# Run with the PINNED binary (see meta/README.md), never the code being edited.
+run = "meta-speed"
+
+[agent]
+kind = "command"
+command = 'opencode run --auto --archived --title "dream $DREAM_RUN" ${OPENCODE_MODEL:+-m "$OPENCODE_MODEL"} "$DREAM_PROMPT"'
+prompt = """
+Track: SPEED. Read AGENTS.md first, then follow its "Speed track" section.
+Goal: make `examples/compare` (replay, dreaming, policies, tree code) faster while
+its output stays byte-identical to meta/reference/compare.jsonl.
+Make ONE focused change. Profile before optimising (e.g. `perf record`).
+"""
+timeout = 21600
+
+[evaluate]
+command = "sh meta/eval-speed.sh"
+goal = "min"
+timeout = 3600
+remeasure_root = true    # wall time drifts with machine load
+confirm_top = 2
+protected = ["meta", "examples/compare.rs", "tests", "research", "Cargo.lock"]
+
+[explore]
+budget = 4
+min_calls = 2
+
+[dream]
+mode = "strict"
+holdout = 1
