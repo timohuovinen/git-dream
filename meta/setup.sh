@@ -1,9 +1,10 @@
 #!/bin/sh
 # One-time setup on the machine that runs opencode. Run from the repo root of a
 # DEDICATED clone (not your working checkout):
-#   sh meta/setup.sh                            # pinned binary built from this commit (default)
-#   GIT_DREAM_VERSION=v0.2.2 sh meta/setup.sh   # pinned binary = that GitHub release instead
-# Releases <= v0.2.1 predate `[evaluate] protected` and cannot read meta/*.toml.
+#   sh meta/setup.sh                            # pinned binary = latest GitHub release (default)
+#   GIT_DREAM_VERSION=v0.2.2 sh meta/setup.sh   # a specific release (>= v0.2.2: older ones
+#                                               # cannot read `[evaluate] protected`)
+#   GIT_DREAM_FROM_SOURCE=1 sh meta/setup.sh    # build the pinned binary from this commit
 # 1. installs a pinned git-dream binary outside PATH, so attempts that break
 #    git-dream can't break the harness running them;
 # 2. records the speed-track reference output at this commit.
@@ -12,14 +13,14 @@ repo=timohuovinen/git-dream
 pin=${GIT_DREAM_PIN:-$HOME/.local/git-dream-pinned}
 mkdir -p "$pin/bin"
 
-if [ -z "${GIT_DREAM_VERSION:-}" ]; then
+if [ -n "${GIT_DREAM_FROM_SOURCE:-}" ]; then
   cargo install --locked --path . --root "$pin" --force
 else
   case $(uname -m) in
     x86_64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;;
-    *) echo "no release for $(uname -m); unset GIT_DREAM_VERSION to build from source" >&2; exit 1 ;;
+    *) echo "no release for $(uname -m); use GIT_DREAM_FROM_SOURCE=1" >&2; exit 1 ;;
   esac
-  tag=$GIT_DREAM_VERSION
+  tag=${GIT_DREAM_VERSION:-$(gh release view -R "$repo" --json tagName -q .tagName)}
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   gh release download "$tag" -R "$repo" -D "$tmp" -p "*-$arch-unknown-linux-musl.tar.gz" -p SHA256SUMS
   (cd "$tmp" && grep -- "-$arch-unknown-linux-musl.tar.gz" SHA256SUMS | sha256sum -c -)

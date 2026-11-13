@@ -472,7 +472,10 @@ impl Engine {
     pub fn explore(&self, round: Option<u32>, budget: Option<usize>) -> Result<Tree> {
         let round = match round {
             Some(r) => r,
-            None => self.next_round()?,
+            None => {
+                self.resume()?;
+                self.next_round()?
+            }
         };
         if round > 1 { self.replay_history()?; }
         let budget = budget.unwrap_or(self.cfg.explore.budget);
@@ -561,7 +564,26 @@ impl Engine {
         Ok(best)
     }
 
+    /// A run killed mid-round (timeout, Ctrl-C, reboot) leaves recorded attempts
+    /// but no promoted one, and the next round would have no parent. Close such a
+    /// round by promoting from the attempts it recorded: they cost real evaluations,
+    /// so they are kept. Its tree simply has fewer calls than its budget.
+    pub fn resume(&self) -> Result<()> {
+        let Some(&last) = self.mem.rounds(&self.run)?.last() else { return Ok(()) };
+        if self.mem.rev(&format!("refs/dream/{}/r{last:02}/best", self.run)).is_some() {
+            return Ok(());
+        }
+        let t = self.mem.load_tree(&self.run, last)?.ok_or_else(|| anyhow!("round {last} not found"))?;
+        anyhow::ensure!(t.nodes.iter().any(|n| n.score.is_some()),
+            "round {last} of run {:?} was interrupted before any attempt was scored; fix the evaluator, then use a new --run (or `git dream clean --run {} --yes`)", self.run, self.run);
+        let best = self.promote(&t)?;
+        self.log(&format!("  r{last}: interrupted after {} calls; resumed by promoting n{:03} {} from its recorded attempts", t.calls(), best.id, fs(best.score)));
+        self.compact(last);
+        Ok(())
+    }
+
     pub fn rounds(&self, n: usize, dream: bool, budget: Option<usize>, candidates: Option<usize>, mode: Option<Mode>) -> Result<Vec<Tree>> {
+        self.resume()?;
         let mut out = vec![];
         for _ in 0..n {
             let r = self.next_round()?;

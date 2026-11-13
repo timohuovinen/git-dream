@@ -22,6 +22,10 @@ With `confirm_top > 0`, confirmation includes the incumbent root as well as the 
 
 For command agents, `evaluate.protected = ["bench.sh", "tests"]` rejects attempts that change the listed paths relative to the base commit. The rejected attempt is still recorded. This catches direct edits to the evaluation contract; it does not isolate code execution.
 
+## Interrupted runs
+
+A run killed mid-round (timeout, Ctrl-C, reboot) can be continued: `run` and `explore` first close the interrupted round by promoting the best of the attempts it recorded, then start the next round. That round's tree has fewer calls than its budget, and replay treats the missing proposals as missing data. If no attempt of the interrupted round was scored, the run stops with an error instead; start a new run after fixing the evaluator. Earlier versions failed with "round N has no promoted attempt". Two processes must still not run the same run at the same time.
+
 ## External policies and invalid inputs
 
 External policies have a per-request/reply deadline, configured by `timeout` in their `[policies.external.NAME]` table (default: 10 seconds). Invalid replies, unknown node IDs, closed output, and deadline failures return an error instead of being scored as an inexpensive stopping decision. Timeout cleanup terminates the policy process group. Replies are limited to 1 MiB.
