@@ -199,8 +199,7 @@ cmd_stop() {
   pkill -TERM -s "$pid" 2>/dev/null || kill -TERM "$pid"
   echo "=== $(date -Is) stopped" >> "$d/log"
   echo "stopped '$run'. Recorded attempts remain: git-dream status --run $run --config $d/config.toml"
-  echo "note: git-dream cannot continue a run stopped mid-round (\"round N has no promoted attempt\");"
-  echo "      start a new run name to keep searching. Finished rounds and dream/$run/best are kept."
+  echo "continue later with: dream start $run -n N (git-dream >= 0.2.2 promotes the interrupted round's best recorded attempt)"
 }
 
 [ $# -ge 1 ] || usage 2

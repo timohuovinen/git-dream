@@ -79,7 +79,8 @@ Be honest about the result:
   `dream/<run>/best` before claiming a gain;
 - "no improvement" is a valid result.
 
-`dream stop <run>` kills a run. A run stopped mid-round can't be continued; start a new name instead.
+`dream stop <run>` kills a run. `dream start <run> -n N` continues it later: an interrupted round is
+closed by promoting its best recorded attempt.
 Deleting a run (`git dream clean --run NAME --yes`) is irreversible, so ask first.
 
 ## Harness wiring (done by `dream new`)
