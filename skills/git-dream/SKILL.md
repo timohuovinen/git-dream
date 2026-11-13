@@ -1,115 +1,121 @@
 ---
 name: git-dream
-description: Use git-dream to search for the best solution to a measurable coding problem by trying many variants as git commits, scoring each with a fixed evaluator, and letting an exploration policy choose what to try next. Use when the user wants to optimize a benchmark, tune parameters, or have an agent iterate many attempts and keep the best; when a repo has a .git-dream.toml; or when asked to run, inspect, or improve git-dream itself.
+description: Use when the user says "dream up ..." or "dream on ...", or asks to let an agent iterate many attempts on a measurable goal (faster, smaller, higher score, fewer failures) and keep the best. Sets up and launches a git-dream run in the current repo, using the same coding agent you are (opencode, Claude Code, Codex, Gemini) as the attempt-making agent, then reports progress and the best result. Also covers reading git-dream results and the agent role inside a run.
 ---
 
-# git-dream
+# git-dream: "dream up X"
 
-git-dream (`git dream`, or the `git-dream` binary) runs an experimental search inside any git repo:
+git-dream runs a long experimental search in a git repo:
 
-- a fixed **agent** proposes a change;
-- a fixed **evaluator** scores it;
-- an **exploration policy** picks which attempt to continue next and when to stop.
+- a **coding agent** makes one attempt at a time, each in a scratch worktree;
+- a fixed **evaluator** scores each attempt;
+- an **exploration policy** picks which attempt to build on next.
 
-Each attempt becomes a commit under `refs/dream/<run>/rNN/nNNN`. Scores are kept in commit trailers
-and evaluator output in git notes. The user's checkout and branch are never touched. Between
-rounds, git-dream "dreams": it replays candidate policies over the recorded history and deploys a
-better one only if it passes a held-out check.
+Every attempt is a commit under `refs/dream/<run>/...`. The user's branch and files are never touched.
 
-## Install (no clone needed)
+The helper `scripts/dream`, in this skill's directory, handles setup and detached launching. Below,
+`dream` means `<this skill's dir>/scripts/dream`. Use it via the PATH symlink if `command -v dream`
+finds it.
 
-```sh
-gh release download -R timohuovinen/git-dream -p '*x86_64-unknown-linux-musl.tar.gz'   # aarch64 also exists
-tar xzf git-dream-*.tar.gz && install git-dream-*/git-dream ~/.local/bin/
-git dream --version
-```
+## When the user says "dream up X"
 
-## Set up a project
+Work in the repo you are in. Follow these steps in order; only step 3 needs the user.
 
-1. **Define success before anything else.** The evaluator is the whole contract. It must:
-   - be deterministic, or repeated enough to be stable;
-   - print the score as the **last stdout line**, either a number or `{"score": N, "status": "ok", ...}`;
-   - exit non-zero, or print `"score": null`, when the attempt is invalid. Run the correctness tests
-     *before* measuring, e.g. `cargo test -q >/dev/null 2>&1 && ./bench.sh`.
-2. Run `git dream init --kind space` (parameter search) or `git dream init --kind command` (an agent
-   edits code). Then edit `.git-dream.toml` and commit it. Runs start from HEAD, so anything
-   uncommitted is invisible to them.
-3. List the evaluation contract under `[evaluate] protected` (tests, the bench script, fixtures) so
-   that attempts which edit it are rejected.
-4. Run the evaluator once by hand on HEAD before starting a long run.
+1. **Understand X and the repo.** Read enough code, tests and existing benchmarks to know what
+   "better" means for X and how it can be measured.
 
-A minimal command-agent config, using opencode as the agent:
+2. **Design the evaluator.** This is the most important step, because the search optimizes exactly
+   what it measures. It must:
+   - be **one command** run from the repo root, whose **last stdout line** is the score: a number,
+     or `{"score": N, "status": "ok", ...extra metrics}`;
+   - **fail** (non-zero exit) when the attempt is broken, so run the correctness checks first,
+     e.g. `cargo test -q >/dev/null 2>&1 && ./bench.sh` or `npm test --silent && node bench.js`;
+   - be **stable**. For timings, use the median of several runs and set
+     `remeasure_root = true` and `confirm_top = 2`;
+   - be **cheap relative to an attempt**: seconds to a few minutes;
+   - be hard to game. List the tests, benchmark and fixtures in `protected`.
 
-```toml
-run = "main"
-[agent]
-kind = "command"
-command = 'opencode run --auto --archived --title "dream $DREAM_RUN" "$DREAM_PROMPT"'
-prompt = "Make ./bench.sh faster. Keep `cargo test` passing. Make one focused change."
-timeout = 21600           # seconds per attempt; generous for slow local models
-[evaluate]
-command = "cargo test -q >/dev/null 2>&1 && ./bench.sh"
-goal = "min"              # or "max"
-timeout = 3600
-remeasure_root = true     # noisy timings: re-measure the incumbent
-confirm_top = 2           # re-run the top candidates before promoting
-protected = ["bench.sh", "tests"]
-[explore]
-budget = 4                # proposals per round
-min_calls = 2             # stops policies quitting too early
-[dream]
-mode = "strict"           # an LLM agent is stochastic: only recorded edges replay
-holdout = 1
-```
+   Prefer a benchmark or test that already exists. If you have to write one, write it **outside the
+   tree**, at `<run dir>/eval.sh`, and call it by absolute path. The run starts from HEAD, so a new
+   in-tree script would only count if committed, and don't commit on the user's behalf.
 
-For parameter search (`kind = "space"`), set `[agent] start` and `[agent.knobs]` grids. The
-evaluator reads `$DREAM_PARAMS` (JSON) or `$DREAM_PARAM_<NAME>`. There, `[dream] mode = "cache"` is valid.
+3. **Create the run and show it to the user before starting.**
+   ```sh
+   dream new <run-name>     # writes .git/dream-runs/<run>/config.toml, wired to YOUR harness
+   ```
+   Fill in every TODO: the `prompt` (the goal, what must keep working, "one focused change per
+   attempt"), `[evaluate] command`, `goal`, `protected` and timeouts. Then run:
+   ```sh
+   dream check <run-name>   # runs the evaluator once on HEAD in a throwaway worktree
+   ```
+   Show the user the goal, the evaluator, the baseline score, the protected paths, the rounds ×
+   budget, and a rough time estimate. Get an explicit OK. If the work tree has uncommitted changes,
+   say that the run starts from HEAD and ignores them.
 
-## Run and inspect
+4. **Launch the run detached**, then stop working:
+   ```sh
+   dream start <run-name> -n <rounds>    # default 3; it keeps running after this session ends
+   ```
+   Tell the user the run name, and that they can ask "how is the dream going" or run
+   `dream status <run>`. Don't poll in a loop: attempts take minutes to hours, and your own model
+   may be the same one the run uses.
+
+## When asked how it's going, or for results
 
 ```sh
-git dream run -n 3                 # rounds of dream -> explore -> promote
-git dream run -n 3 --run base --no-dream   # fixed-policy baseline for comparison
-git dream status [--run NAME]      # scores per round, deployed policy, best attempt
-git dream show [ROUND] [--run NAME]  # one round's discovery tree
-git show dream/<run>/best          # the best attempt is a normal commit
-git diff HEAD dream/<run>/best     # what it changed; cherry-pick or merge it deliberately
-git dream replay "refine_best" "ucb:c=0.05" -v --holdout 1   # compare policies offline
-git dream policies                 # built-in families and grids
+dream status [<run>]          # running/finished, log tail, rounds, scores, best attempt
+dream log <run> [lines]
+git dream show --run <run> --config .git/dream-runs/<run>/config.toml   # a round's tree
+git show dream/<run>/best      # the best attempt's commit; its message is the agent's write-up
+git diff HEAD dream/<run>/best
 ```
 
-Runs can take hours. Start them in tmux or in the background, and check `status` instead of
-waiting. `git dream clean --run NAME --yes` deletes a run, which is irreversible: ask the user first.
+To summarize, give the baseline versus the best score, the ideas that worked and those that failed,
+and the best diff. To adopt it, offer `git cherry-pick dream/<run>/best`, or a new branch from it,
+for the user to review. Never merge into their branch on your own.
 
-## When you ARE the agent inside a run
+Be honest about the result:
+- the best of many noisy measurements is optimistically biased, so re-run the evaluator on
+  `dream/<run>/best` before claiming a gain;
+- "no improvement" is a valid result.
 
-The environment gives you three things:
+`dream stop <run>` kills a run. A run stopped mid-round can't be continued; start a new name instead.
+Deleting a run (`git dream clean --run NAME --yes`) is irreversible, so ask first.
 
-- `$DREAM_PROMPT`: the task and your position in the tree;
-- `$DREAM_CONTEXT`: a file with every earlier attempt, its write-up, its score and the evaluator
-  output for failures;
-- `$DREAM_MESSAGE_FILE`: where your proposal goes.
+## Harness wiring (done by `dream new`)
 
-1. Read `$DREAM_CONTEXT` first. Don't repeat a measured idea unless you can show that its
-   implementation, rather than the idea, failed (`git show <sha>`).
-2. Make one focused change. Never edit protected paths.
+`dream harness` detects which agent you are, and `dream new` writes the matching headless command.
+Override it with `--harness`.
+
+| harness | attempt command |
+|---|---|
+| opencode | `opencode run --auto --archived --title "dream $DREAM_RUN r$DREAM_ROUND" "$DREAM_PROMPT"` |
+| claude | `claude -p "$DREAM_PROMPT" --permission-mode acceptEdits --allowedTools Bash` |
+| codex | `codex exec --full-auto "$DREAM_PROMPT"` |
+| gemini | `gemini --yolo -p "$DREAM_PROMPT"` |
+
+Attempt agents can run arbitrary commands inside their scratch worktree. That's needed for building
+and testing, but it is not a sandbox. Slow local models need long `[agent] timeout`s; opencode gets
+6 h by default.
+
+## If you ARE the agent inside a run
+
+You can tell because `$DREAM_PROMPT`, `$DREAM_CONTEXT` and `$DREAM_MESSAGE_FILE` are set.
+
+1. Read `$DREAM_CONTEXT`, which is every earlier attempt with its write-up, score and failure output.
+   Don't repeat a measured idea unless you can show its implementation, rather than the idea, was at
+   fault (`git show <sha>`).
+2. Make one focused change. Don't touch protected paths. Don't commit, because git-dream commits for you.
 3. Write `$DREAM_MESSAGE_FILE`: a one-line summary, a blank line, then the idea, the evidence from the
    history, why it isn't a repeat, and any numbers you measured.
 
-## Honest interpretation
+## Install and reference
 
-- Replay gains are not live gains. Before adopting a winner, re-measure it fresh and compare it
-  against a `--no-dream` baseline at equal cost.
-- The best attempt is selected over many noisy measurements, so it is optimistically biased. Use
-  `confirm_top` and verify it on inputs the search never saw.
-- Policies that stop early can lock the search into a local optimum; keep `min_calls` above 0.
-
-## Improving git-dream itself
-
-The git-dream repo has a self-improvement kit. See `meta/README.md` and `AGENTS.md`:
-
-- `meta/policy.toml`: better search quality;
-- `meta/speed.toml`: same output, faster.
-
-Run them with the pinned binary (`~/.local/git-dream-pinned/bin/git-dream`, installed by
-`meta/setup.sh`), never with a binary built from the code under edit.
+- The binary must be on PATH as `git-dream`.
+  - Install from releases: `gh release download -R timohuovinen/git-dream -p '*x86_64-unknown-linux-musl.tar.gz'`,
+    then put `git-dream` in `~/.local/bin`.
+  - The newest config keys, such as `protected`, may need a build from source:
+    `cargo install --git https://github.com/timohuovinen/git-dream`.
+- Full config reference: the git-dream README (`kind = "space"` for pure parameter search,
+  `[dream]` and `[policies]` for the exploration policy).
+- To improve git-dream itself, use `meta/README.md` in the git-dream repo.
