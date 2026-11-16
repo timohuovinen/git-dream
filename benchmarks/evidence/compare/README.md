@@ -1,5 +1,7 @@
 # Recorded output of the `compare` benchmark
 
+The later run with the `bandit` arms (300 seeds from 70000) is in [bandit/](bandit/).
+
 The prospective synthetic comparison: one recorded run of [compare.rs](../../compare.rs).
 
 - [Protocol and interpretation](../../../docs/validation.md): methods, budgets, training/test separation, limitations, and results.

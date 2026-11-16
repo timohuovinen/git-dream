@@ -44,6 +44,31 @@ pub fn agent_key(a: &SpaceAgent, key: &str) -> String {
     a.names.iter().zip(key.split('-')).map(|(n, p)| format!("{n}={}", &p[1..])).collect::<Vec<_>>().join(",")
 }
 
+/// Offset of a retry in the agent's proposal index: larger than any budget, so
+/// retries never collide with another proposal's first try.
+const RETRY: usize = 1 << 20;
+
+/// k-th proposal from `design` (an oracle key): (child's oracle key, change).
+///
+/// With no levels (`L = 0`) the knobs b, r and o do nothing, so a move of one of
+/// them proposes the design it started from. The case study's agent never made
+/// such a proposal, and neither does this one unless `inert_moves` is set: it
+/// asks the tool's agent again (at most 32 times) until the design changes.
+/// `inert_moves` gives the tool's agent as it is, which is what a real run of
+/// examples/hashbench/.git-dream.toml does. With levels the two are identical.
+pub fn propose(a: &SpaceAgent, design: &str, k: usize, inert_moves: bool) -> (String, String) {
+    let from = agent_key(a, design);
+    let mut out = (design.to_string(), "no-op".to_string());
+    for j in 0..32 {
+        let (d, change) = a.propose(&from, k + j * RETRY);
+        out = (oracle_key(a, &d), change);
+        if inert_moves || out.0 != design {
+            break;
+        }
+    }
+    out
+}
+
 /// One measurement of a true score `s` with relative noise `noise` (standard deviation).
 pub fn noisy(s: f64, noise: f64, rng: &mut Rng) -> f64 {
     let u = rng.f64().max(1e-300);

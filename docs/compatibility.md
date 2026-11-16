@@ -10,13 +10,25 @@ For a `bandit` policy, dreaming fits the yield model over recorded attempts inst
 
 `[explore] extend` defaults to `false`; newly generated templates set it to `true`. With it, `git dream run` adds `budget` proposals to the latest round's tree instead of starting a round, also when that round was killed before promotion, and `--new-round` starts a round. `--extend` does the same for one invocation. The round's policy is first driven through its recorded attempts, so an extended round equals one that ran uninterrupted with the larger budget. If the policy cannot reproduce the recorded attempts (an external policy that is not deterministic), extension fails and nothing is recorded. Root re-measurement happens only when a round starts; confirmation runs at the end of every step.
 
+## Scratch worktrees are outside `.git`
+
+Attempts are built and evaluated in scratch worktrees. These were in `.git/dream/wt/`. They are now in `$GIT_DREAM_WORKTREES/<repository>/` if that variable is set, otherwise in the user's cache directory: `$XDG_CACHE_HOME/git-dream/<repository>/`, `%LOCALAPPDATA%\git-dream\<repository>\` or `~/.cache/git-dream/<repository>/`. `<repository>` is the directory's name and a hash of its path.
+
+The reason: Claude Code refuses to write any file below a `.git` directory, so an agent started in `.git/dream/wt` could not edit the code. In the first run with a real agent every attempt ended unchanged. Commits, refs and notes are where they were.
+
+After upgrading, the old worktrees are unused: delete `.git/dream/wt` and run `git worktree prune`. Ignored build outputs in them are rebuilt once in the new place. `git dream clean` removes a run's worktrees there.
+
+## Trailers are read with git's parser
+
+A recorded outcome is the last paragraph of the attempt's commit message, read with `%(trailers)`. Earlier, any line of the message that began with `Dream-` was read as an outcome, so an agent's write-up that quoted such a line (they read them in the history) could change what was loaded and stop the round from being extended. No recorded history changes meaning unless a write-up contained such a line.
+
 ## Attempts at once
 
 `[explore] parallel` (default 1) and `[explore] evaluations` (default `"alone"`) are new; a configuration without them behaves as before, one attempt at a time, and writes the same commits. `git dream run` and `git dream explore` accept `--parallel N`.
 
 With `parallel` above 1:
 
-- Each attempt in flight uses its own scratch worktree: `.git/dream/wt/<run>` for lane 0, `.git/dream/wt/<run>@<lane>` for the others. Agents and evaluators receive `$DREAM_LANE`.
+- Each attempt in flight uses its own scratch worktree: `<run>` for lane 0, `<run>@<lane>` for the others, in the repository's worktree directory (see below). Agents and evaluators receive `$DREAM_LANE`.
 - An attempt is committed when it starts, with `Dream-Status: pending` and no score, and its ref is moved to the real commit when it finishes. A round killed mid-flight therefore keeps `pending` attempts; extending the round runs them again, and a new round ignores them. `pending` is a new status: tools that read the trailers, and external policies, will see it.
 - A result that arrived after later attempts had been chosen carries `Dream-Seen: <id>`, the first attempt chosen with that result known. Extension uses it to show the round's policy exactly what it saw at each recorded choice.
 - With `evaluations = "alone"` (the default) nothing else runs during an evaluation: attempts go in waves. For a parameter-space agent this leaves nothing to overlap, so `parallel` is ignored unless `evaluations = "parallel"`.

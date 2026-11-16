@@ -33,6 +33,10 @@ path = "benchmarks/fidelity.rs"
 test = true   # its analysis has unit tests; `cargo test` runs them
 
 [[example]]
+name = "runs"
+path = "benchmarks/runs.rs"
+
+[[example]]
 name = "score"
 path = "benchmarks/score.rs"
 
@@ -44,6 +48,10 @@ path = "benchmarks/summarize.rs"
 [[example]]
 name = "patient"
 path = "policies/patient.rs"
+
+[[example]]
+name = "chains"
+path = "policies/chains.rs"
 
 [profile.release]
 opt-level = 3

@@ -2,6 +2,8 @@
 //! the hashbench case study (examples/hashbench/evidence/oracle.jsonl), of which
 //! about 4 in 10 fail ("full"). Every arm spends the same number of evaluations
 //! from the same start; each evaluation gets fresh multiplicative noise.
+//! The agent is the case study's: it never proposes the design it is continuing
+//! (`--inert-moves`: the tool's agent as it is, see `grid::propose`).
 //! Reported: how far the true (noise-free) score of the design each arm ends on
 //! is from the best design on the grid.
 //!
@@ -20,7 +22,7 @@ use serde_json::{json, Value};
 
 #[path = "grid.rs"]
 mod grid;
-use grid::{agent_key, oracle_key};
+use grid::oracle_key;
 
 #[derive(Parser)]
 struct Args {
@@ -36,18 +38,23 @@ struct Args {
     /// Evaluations per arm (the root is extra).
     #[arg(long, default_value_t = 320)]
     total: usize,
+    /// Let the agent propose moves of knobs that do nothing while L = 0 (the
+    /// tool's agent as it is; the case study's agent never proposed them)
+    #[arg(long)]
+    inert_moves: bool,
 }
 
 struct Grid<'a> {
     agent: &'a SpaceAgent,
     oracle: &'a grid::Oracle,
     noise: f64,
+    inert_moves: bool,
     rng: Rng,
 }
 
 impl Grid<'_> {
-    fn node(&mut self, design: String) -> Node {
-        let key = oracle_key(self.agent, &design);
+    /// One measurement of the design with oracle key `key`.
+    fn node(&mut self, key: String) -> Node {
         match self.oracle[&key] {
             Some(s) => Node::new(0, None, None, key, Some(grid::noisy(s, self.noise, &mut self.rng)), OK, ""),
             None => Node::new(0, None, None, key, None, "full", ""),
@@ -57,7 +64,7 @@ impl Grid<'_> {
 
 impl World for Grid<'_> {
     fn step(&mut self, t: &Tree, parent: usize, k: usize) -> Result<Node> {
-        let (d, change) = self.agent.propose(&agent_key(self.agent, &t.nodes[parent].design), k);
+        let (d, change) = grid::propose(self.agent, &t.nodes[parent].design, k, self.inert_moves);
         let mut n = self.node(d);
         n.id = t.nodes.len();
         n.parent = Some(parent);
@@ -89,8 +96,8 @@ fn main() -> Result<()> {
     let run = |method: &str, spec: &Value, dream: bool, rounds: u32, budget: usize, lanes: usize| -> Result<Vec<f64>> {
         let rows = git_dream::par::map(git_dream::par::threads(), &seeds, |_, &seed| -> Result<(Value, f64)> {
             let a = grid::agent(&seed.to_string())?;
-            let mut world = Grid { agent: &a, oracle: &oracle, noise: args.noise, rng: Rng::new(seed) };
-            let mut root = world.node(a.root());
+            let mut world = Grid { agent: &a, oracle: &oracle, noise: args.noise, inert_moves: args.inert_moves, rng: Rng::new(seed) };
+            let mut root = world.node(oracle_key(&a, &a.root()));
             let mut p = reg.make(spec)?;
             let mut hist: Vec<Tree> = vec![];
             let (mut evaluations, mut waves) = (0, 0);
