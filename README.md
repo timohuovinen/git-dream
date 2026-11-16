@@ -4,6 +4,8 @@
 
 Use a fixed agent to propose changes and a fixed evaluator to score them. git-dream records the search as commits, keeps your checkout separate, and decides which attempt to continue next. Its default policy learns that from measured outcomes only.
 
+>Find better solutions per evaluation, re-using features of git instead of re-implementing them.
+
 [Dream-RSI](https://www.dream-rsi.com/) ("Recursive Self-Improvement through Evolving Worlds", Google / Google DeepMind, 2026) uses three parts:
 
 - a fixed **discovery agent** proposes changes;
