@@ -35,20 +35,26 @@ remeasure_root = false            # true for noisy benchmarks: re-measure each r
 confirm_top = 0                   # re-measure the top-k designs before promoting (noisy benchmarks)
 
 [explore]
-budget = 20                       # max proposals per round (root and confirmation evaluations are extra)
-min_calls = 5                     # continue best if the policy stops before this floor
+budget = 20                       # proposals per `git dream run` step (root and confirmation evaluations are extra)
+extend = true                     # each step adds to the current round's tree, so every attempt stays
+                                  # continuable; `git dream run --new-round` starts over from the best attempt
+parallel = 1                      # attempts evaluated at once, each in its own worktree. Only takes effect with
+evaluations = "alone"             # evaluations = "parallel": say so when the score does not depend on machine
+                                  # load (a test count, an accuracy, a size). Never for a timing benchmark.
 
 [dream]
-holdout = 1                      # reserve last round per run; keep incumbent until enough history
+history = "run"                   # "all": learn from, and show agents, every run in this repository
+# A bandit policy is refitted from measured outcomes when a new round starts (the yield
+# model). The settings below only apply to families tuned by replay (method = "replay"):
+holdout = 1                       # reserve last round per run; keep incumbent until enough history
 lam = 0.02                        # cost of spending the whole budget, in units of relative improvement
 candidates = 300                  # sampled policies per dream
 mode = "cache"                    # cache: reuse any recorded measurement of a design; strict: recorded edges only
 normalize = "none"                # "root": rescale cached scores by each tree's root (machine drift)
-history = "run"                   # "all": dream over, and show agents, every run in this repository
 
 [policies]
-initial = { family = "refine_best" }
-families = []                     # restrict the dream search (default: all searchable families)
+initial = { family = "bandit" }   # learns which kind of move pays; see `git dream policies`
+families = []                     # restrict the replay search (default: all searchable families)
 # Policies in any language: a program answering one JSON line per decision (see README).
 # [policies.external.patient]
 # command = "./target/release/patient-policy"
@@ -82,18 +88,20 @@ confirm_top = 2
 protected = ["bench.sh", "tests"] # reject direct edits to the evaluation contract
 
 [explore]
-budget = 6                        # max proposals; root and confirmation evaluations are extra
-min_calls = 2                     # preserve some exploration if the policy stops
+budget = 6                        # proposals per `git dream run` step; root and confirmation evaluations are extra
+extend = true                     # each step adds to the current round's tree, so every attempt stays
+                                  # continuable; `git dream run --new-round` starts over from the best attempt
+parallel = 4                      # agents working at once, each in its own worktree ($DREAM_LANE = 0..3)
+evaluations = "alone"             # what may run during an evaluation. "alone": nothing (timing benchmarks:
+                                  # the agents finish, then each result is measured by itself); "serial": agents,
+                                  # but no other evaluation; "parallel": anything (scores independent of load)
 
 [dream]
-holdout = 1                      # reserve last round per run; keep incumbent until enough history
-lam = 0.05
-candidates = 300
-mode = "strict"                   # stochastic agent: only recorded edges can be replayed
-history = "run"                   # "all": dream over, and show agents, every run in this repository
+history = "run"                   # "all": learn from, and show agents, every run in this repository
+mode = "strict"                   # replay-tuned families only: a stochastic agent replays recorded edges only
 
 [policies]
-initial = { family = "refine_best" }
+initial = { family = "bandit" }   # learns which kind of move pays; see `git dream policies`
 
 [storage]
 repack = true                     # pack each round's attempts into one pack (deltas instead of full copies)
@@ -126,10 +134,17 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// N rounds of: dream (replay policies over history) -> explore -> promote
+    /// N steps of search. Each step is a new round (dream -> explore -> promote) or,
+    /// with `[explore] extend` / --extend, more attempts in the current round's tree
     Run {
         #[arg(short = 'n', long = "rounds", default_value_t = 1)]
         rounds: usize,
+        /// Add to the current round's tree instead of starting a new round
+        #[arg(long, conflicts_with = "new_round")]
+        extend: bool,
+        /// Start a new round from the best attempt (after dreaming), even with `[explore] extend`
+        #[arg(long)]
+        new_round: bool,
         #[arg(long)]
         budget: Option<usize>,
         #[arg(long)]
@@ -139,17 +154,25 @@ enum Cmd {
         /// Baseline: keep the policy fixed
         #[arg(long)]
         no_dream: bool,
+        /// Attempts in flight at once (default: `[explore] parallel`)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=64))]
+        parallel: Option<u64>,
         #[command(flatten)]
         c: Common,
     },
-    /// One live round with the deployed policy
+    /// One live round with the deployed policy (--extend: more attempts in the current round)
     Explore {
         #[arg(long)]
         budget: Option<usize>,
+        #[arg(long)]
+        extend: bool,
+        /// Attempts in flight at once (default: `[explore] parallel`)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=64))]
+        parallel: Option<u64>,
         #[command(flatten)]
         c: Common,
     },
-    /// Dream only: choose and deploy the policy for the next round
+    /// Dream only: learn from recorded history and deploy the policy for the next round
     Dream {
         #[arg(long)]
         budget: Option<usize>,
@@ -287,13 +310,16 @@ fn real_main() -> Result<()> {
             std::fs::write(&p, if kind == "space" { TEMPLATE_SPACE } else { TEMPLATE_COMMAND })?;
             println!("wrote {}\nedit [agent] and [evaluate] and commit it (a run starts from the commit you are on), then: git dream run -n 3", p.display());
         }
-        Cmd::Run { rounds, budget, cands, mode: m, no_dream, c } => {
-            let e = engine(&c)?;
-            e.rounds(rounds, !no_dream, budget, cands, mode(&m)?)?;
+        Cmd::Run { rounds, extend, new_round, budget, cands, mode: m, no_dream, parallel, c } => {
+            let mut e = engine(&c)?;
+            e.cfg.explore.parallel = parallel.map_or(e.cfg.explore.parallel, |p| p as usize);
+            e.run(rounds, !no_dream, budget, cands, mode(&m)?, extend || new_round || e.cfg.explore.extend, new_round)?;
             status(&e)?;
         }
-        Cmd::Explore { budget, c } => {
-            engine(&c)?.explore(None, budget)?;
+        Cmd::Explore { budget, extend, parallel, c } => {
+            let mut e = engine(&c)?;
+            e.cfg.explore.parallel = parallel.map_or(e.cfg.explore.parallel, |p| p as usize);
+            if extend { e.extend(budget)? } else { e.explore(None, budget)? };
         }
         Cmd::Dream { budget, cands, mode: m, top, dry_run, c } => {
             let e = engine(&c)?;
@@ -357,7 +383,7 @@ fn real_main() -> Result<()> {
         Cmd::Policies { c } => {
             let e = engine(&c)?;
             for f in &e.registry.families {
-                println!("{}{}", f.name, if f.grid.is_empty() { "  (not searched: no grid)" } else { "" });
+                println!("{}{}", f.name, if f.name == git_dream::model::BANDIT { "  (learns from measured outcomes; not tuned by replay)" } else if f.grid.is_empty() { "  (not searched: no grid)" } else { "" });
                 println!("    {}", f.doc);
                 for (k, v) in &f.grid {
                     println!("    {k}: [{}]", v.iter().map(Param::show).collect::<Vec<_>>().join(", "));

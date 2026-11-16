@@ -11,13 +11,12 @@ use crate::rng::Rng;
 use crate::tree::{repairable, Tree};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::rc::Rc;
 
 pub const INF: f64 = f64::INFINITY;
 
@@ -76,7 +75,8 @@ enum Kind {
     Beam,
     Softmax,
     Repair,
-    External(Rc<RefCell<External>>),
+    Bandit,
+    External(Arc<Mutex<External>>),
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +145,12 @@ impl Registry {
                 ]),
                 kind: Kind::Repair,
             },
+            Family {
+                name: crate::model::BANDIT.into(),
+                doc: "Learns which kind of move pays (continue the best attempt / another scored attempt / a failed one; for the first time or again) from measured outcomes: one Beta posterior per move type, started from the yield model that dreaming fits over history (s_*, n_*), updated during the round, sampled to pick the next attempt. Params: m (prior weight), gamma (credit to the moves leading to a new best), eps (minimum relative improvement), halflife (attempts until old evidence counts half), stop (end the round when every move type's expected yield is below this; 0 = never).".into(),
+                grid: vec![],
+                kind: Kind::Bandit,
+            },
         ];
         Registry { families }
     }
@@ -159,7 +165,7 @@ impl Registry {
             bail!("policy family {name:?} already exists");
         }
         anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "external policy timeout must be finite, positive and below 1e9 seconds");
-        let ext = Rc::new(RefCell::new(External { command: command.into(), proc: None, timeout: Duration::from_secs_f64(timeout) }));
+        let ext = Arc::new(Mutex::new(External { command: command.into(), proc: None, timeout: Duration::from_secs_f64(timeout) }));
         self.families.push(Family { name: name.into(), doc: doc.into(), grid, kind: Kind::External(ext) });
         Ok(())
     }
@@ -233,7 +239,18 @@ impl Policy {
         self.params.iter().find(|(n, _)| n == k).map(|(_, v)| v)
     }
 
-    fn p(&self, k: &str, default: f64) -> f64 {
+    pub fn set(&mut self, k: &str, v: Param) {
+        match self.params.iter_mut().find(|(n, _)| n == k) {
+            Some(e) => e.1 = v,
+            None => self.params.push((k.into(), v)),
+        }
+    }
+
+    pub fn unset(&mut self, k: &str) {
+        self.params.retain(|(n, _)| n != k);
+    }
+
+    pub fn p(&self, k: &str, default: f64) -> f64 {
         self.get(k).map_or(default, Param::f)
     }
 
@@ -255,7 +272,7 @@ impl Policy {
     /// Which node to continue next, or None to end the round.
     pub fn select(&mut self, t: &Tree) -> Result<Option<usize>> {
         let selected = match &self.kind {
-            Kind::External(ext) => ext.borrow_mut().select(&self.spec(), self.seed, t)?,
+            Kind::External(ext) => ext.lock().unwrap_or_else(|e| e.into_inner()).select(&self.spec(), self.seed, t)?,
             _ => self.choose(t),
         };
         if selected.is_none() && t.calls() < self.p("min_calls", 0.0) as usize {
@@ -306,6 +323,7 @@ impl Policy {
                 Some(c[self.rng.weighted(&w)].id)
             }
             Kind::Repair => self.select_repair(t),
+            Kind::Bandit => crate::model::select(self, self.seed, t),
             Kind::External(_) => unreachable!("external policy handled by select"),
         }
     }
@@ -374,6 +392,11 @@ impl Policy {
 /// and reads one line back: the node id to continue, or `null` to end the round
 /// (a bare value or `{"select": ...}`). It must be deterministic given its
 /// input, or replay cannot reproduce live rounds.
+///
+/// With `[explore] parallel`, attempts that are still running appear as nodes
+/// with `"status": "pending"` and no score: they count as calls, their parent's
+/// `n_exp` includes them, and they cannot be continued yet. After `null`,
+/// git-dream asks again when a running attempt finishes.
 #[derive(Debug)]
 struct Process {
     child: Child,
@@ -403,10 +426,15 @@ impl External {
         std::thread::spawn(move || {
             for req in incoming {
                 let reply = (|| -> Result<Option<usize>> {
-                    writeln!(stdin, "{req}")?;
-                    stdin.flush()?;
+                    // A policy that exits without reading its input (a typo, a crash at
+                    // startup) may be gone before the request is written. Say what it
+                    // printed instead of "broken pipe", whichever way the race went.
+                    let sent = writeln!(stdin, "{req}").and_then(|_| stdin.flush());
                     let mut line = String::new();
                     let size = (&mut stdout).take(1_048_577).read_line(&mut line)?;
+                    if let Err(e) = sent {
+                        anyhow::bail!("policy stopped reading requests ({e}); it replied {:?}", line.chars().take(200).collect::<String>());
+                    }
                     anyhow::ensure!(size > 0, "policy closed its output");
                     anyhow::ensure!(size <= 1_048_576, "policy reply exceeds 1 MiB");
                     let v: Value = serde_json::from_str(line.trim()).with_context(|| format!("policy replied {:?}", line.chars().take(200).collect::<String>()))?;

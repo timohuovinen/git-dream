@@ -56,11 +56,53 @@ agent_cmd() {
   esac
 }
 
-toml_get() { # file dotted.key -> value (strings printed raw)
-  python3 -I -c 'import sys, tomllib
-v = tomllib.load(open(sys.argv[1], "rb"))
-for k in sys.argv[2].split("."): v = v.get(k, "") if isinstance(v, dict) else ""
-print(v)' "$1" "$2"
+# Print `[evaluate] command` from a run config. Reads the one-line strings that `dream new`
+# writes ("..." or '...'); anything else is an error, never a guess.
+eval_command() {
+  awk '
+    function fail(why) { print "dream: [evaluate] command: " why > "/dev/stderr"; failed = 1; exit 1 }
+    function odd(s, q,   n, i) { n = 0; while ((i = index(s, q)) > 0) { n++; s = substr(s, i + 3) } return n % 2 }
+    multi != "" { if (odd($0, multi)) multi = ""; next }   # inside a multi-line string
+    /^[ \t]*\[/ { section = $0; sub(/#.*/, "", section); gsub(/[ \t]/, "", section); next }
+    section == "[evaluate]" && /^[ \t]*command[ \t]*=/ {
+      v = $0; sub(/^[ \t]*command[ \t]*=[ \t]*/, "", v)
+      q = substr(v, 1, 1)
+      if (q != "\"" && q != "\047") fail("expected a quoted string")
+      if (substr(v, 2, 2) == q q) fail("multi-line strings are not supported; put the command on one line")
+      out = ""; closed = 0
+      for (i = 2; i <= length(v); i++) {
+        c = substr(v, i, 1)
+        if (c == q) { closed = 1; break }
+        if (c == "\\" && q == "\"") {
+          c = substr(v, ++i, 1)
+          if (c == "n") c = "\n"
+          else if (c == "t") c = "\t"
+          else if (c != "\"" && c != "\\") fail("unsupported escape \\" c)
+        }
+        out = out c
+      }
+      if (!closed) fail("unterminated string")
+      if (substr(v, i + 1) !~ /^[ \t]*(#.*)?$/) fail("unexpected text after the string")
+      print out; found = 1; exit
+    }
+    { if (odd($0, "\"\"\"")) multi = "\"\"\""; else if (odd($0, "\047\047\047")) multi = "\047\047\047" }
+    END { if (!found && !failed) { print "dream: no [evaluate] command in " FILENAME > "/dev/stderr"; exit 1 } }
+  ' "$1"
+}
+
+# Print the score in an evaluator's last stdout line, as git-dream reads it: a JSON number,
+# or a JSON object with a numeric "score". Fails on anything else.
+score_of() {
+  printf '%s\n' "$1" | awk '
+    BEGIN { num = "-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][-+]?[0-9]+)?" }
+    NR > 1 { exit 1 }
+    { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") }
+    $0 ~ ("^" num "$") { print; ok = 1; exit }
+    /^[{].*[}]$/ && match($0, "\"score\"[ \t]*:[ \t]*" num) && substr($0, RSTART + RLENGTH) ~ /^[ \t]*[,}]/ {
+      v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*/, "", v); print v; ok = 1; exit
+    }
+    END { exit !ok }
+  '
 }
 
 is_running() { [ -f "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null; }
@@ -114,7 +156,7 @@ cmd_check() {
   d=$(runs_dir)/$run; cfg=$d/config.toml
   [ -f "$cfg" ] || die "no run '$run' (dream new $run)"
   grep -q '^[^#]*TODO' "$cfg" && die "$cfg still has TODOs"
-  ev=$(toml_get "$cfg" evaluate.command)
+  ev=$(eval_command "$cfg")
   [ -z "$(git status --porcelain --untracked-files=no)" ] ||
     echo "dream: warning: uncommitted changes are NOT part of the run; it starts from HEAD $(git rev-parse --short HEAD)" >&2
   wt=$d/check
@@ -128,12 +170,8 @@ cmd_check() {
   echo "exit: $rc"
   echo "last line: $last"
   [ $rc -eq 0 ] || { echo "stderr tail:"; tail -n 20 "$d/check.stderr"; die "evaluator failed on HEAD"; }
-  printf '%s' "$last" | python3 -I -c 'import json, sys
-s = sys.stdin.read().strip()
-try: v = float(s)
-except ValueError: v = json.loads(s)["score"]
-assert v is not None and float(v) == float(v), "score is null/NaN"
-print("score on HEAD:", v)' || die "last stdout line is not a number or {\"score\": N}"
+  v=$(score_of "$last") || die "last stdout line is not a number or {\"score\": N}"
+  echo "score on HEAD: $v"
 }
 
 cmd_start() {

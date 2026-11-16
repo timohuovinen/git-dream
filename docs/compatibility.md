@@ -2,6 +2,32 @@
 
 These changes apply to the current source checkout. The archived hashbench experiments retain their original protocol; their reported results have not been regenerated with these safeguards.
 
+## Default policy, yield model and round extension
+
+`[policies] initial` now defaults to `{ family = "bandit" }` when a configuration does not set it. Configurations that name a family (the earlier templates wrote `refine_best`) behave as before, and so do runs that already deployed a policy.
+
+For a `bandit` policy, dreaming fits the yield model over recorded attempts instead of replaying candidates: `holdout`, `lam`, `candidates`, `mode` and `normalize` are not used, and the policy commit holds a `model` table instead of a replay ranking. `[dream] method = "replay"` restores replay-based selection for every family.
+
+`[explore] extend` defaults to `false`; newly generated templates set it to `true`. With it, `git dream run` adds `budget` proposals to the latest round's tree instead of starting a round, also when that round was killed before promotion, and `--new-round` starts a round. `--extend` does the same for one invocation. The round's policy is first driven through its recorded attempts, so an extended round equals one that ran uninterrupted with the larger budget. If the policy cannot reproduce the recorded attempts (an external policy that is not deterministic), extension fails and nothing is recorded. Root re-measurement happens only when a round starts; confirmation runs at the end of every step.
+
+## Attempts at once
+
+`[explore] parallel` (default 1) and `[explore] evaluations` (default `"alone"`) are new; a configuration without them behaves as before, one attempt at a time, and writes the same commits. `git dream run` and `git dream explore` accept `--parallel N`.
+
+With `parallel` above 1:
+
+- Each attempt in flight uses its own scratch worktree: `.git/dream/wt/<run>` for lane 0, `.git/dream/wt/<run>@<lane>` for the others. Agents and evaluators receive `$DREAM_LANE`.
+- An attempt is committed when it starts, with `Dream-Status: pending` and no score, and its ref is moved to the real commit when it finishes. A round killed mid-flight therefore keeps `pending` attempts; extending the round runs them again, and a new round ignores them. `pending` is a new status: tools that read the trailers, and external policies, will see it.
+- A result that arrived after later attempts had been chosen carries `Dream-Seen: <id>`, the first attempt chosen with that result known. Extension uses it to show the round's policy exactly what it saw at each recorded choice.
+- With `evaluations = "alone"` (the default) nothing else runs during an evaluation: attempts go in waves. For a parameter-space agent this leaves nothing to overlap, so `parallel` is ignored unless `evaluations = "parallel"`.
+- An extended round no longer equals an uninterrupted one in general: a step's budget ends a wave early, so later attempts are chosen with different information. With `parallel = 1` the equality holds as before.
+- `evaluate.reuse` does not stop two identical designs that are in flight together from both being measured.
+- Confirmation re-measurements run at once only with `evaluations = "parallel"`.
+
+While dreaming, replay candidates are scored on all cores. The ranking is identical to the single-threaded one.
+
+An external policy that exits without reading its request is now reported with what it printed (`policy stopped reading requests …; it replied "…"`) instead of, depending on timing, a broken-pipe error.
+
 ## Policy selection and replay
 
 `[dream] holdout` now defaults to `1`: the newest round of each run is reserved for a deployment check, with a separate measurement cache. The training winner must improve held-out J without increasing the miss rate. Insufficient history keeps the incumbent. Set `holdout = 0` explicitly to use the earlier unguarded selection rule.

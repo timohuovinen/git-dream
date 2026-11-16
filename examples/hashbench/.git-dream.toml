@@ -1,6 +1,6 @@
 # The hashbench case study (docs/case-study-hashbench.md) expressed as a
 # git-dream config. Copy this file and eval.sh into a hashbench checkout that
-# has src/bin/dream-eval.rs (research/hashbench/).
+# has dream-eval.rs (beside this file) as src/bin/dream-eval.rs and the patch applied.
 run = "main"
 
 [agent]

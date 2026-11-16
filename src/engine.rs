@@ -3,16 +3,17 @@
 
 use crate::agents::{excerpt, failure, note_output, sh, Agent, CommandAgent, EvalResult, Evaluator, SpaceAgent};
 use crate::memory::{check_run, Memory};
+use crate::model;
 use crate::policies::{Param, Policy, Registry};
 use crate::rng::hash;
-use crate::sim::{self, DreamArgs, Mode, ReplayResult, World};
-use crate::tree::{Goal, Node, Tree, FAIL, NOOP, OK};
+use crate::sim::{self, DreamArgs, Mode, ReplayResult};
+use crate::tree::{Goal, Node, Tree, FAIL, NOOP, OK, PENDING};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub const CONFIG_NAME: &str = ".git-dream.toml";
 
@@ -85,13 +86,49 @@ impl Default for EvalCfg {
 pub struct ExploreCfg {
     pub budget: usize,
     pub min_calls: usize,
+    /// `git dream run` adds `budget` attempts to the current round's tree
+    /// instead of starting a new round from its best attempt. A new round keeps
+    /// only the promoted attempt; an extended round keeps every attempt
+    /// continuable (runners-up, failed attempts worth repairing).
+    pub extend: bool,
+    /// Attempts in flight at once, each in its own worktree. The policy picks
+    /// the next attempt without the results of those still running.
+    pub parallel: usize,
+    /// What may run while an evaluation runs. "alone": nothing (a score that
+    /// depends on machine load: agents work at once, then each result is
+    /// measured by itself). "serial": no other evaluation, but agents may be
+    /// working. "parallel": anything (a score that does not depend on load).
+    pub evaluations: String,
 }
 
 impl Default for ExploreCfg {
     fn default() -> Self {
-        ExploreCfg { budget: 20, min_calls: 0 }
+        ExploreCfg { budget: 20, min_calls: 0, extend: false, parallel: 1, evaluations: "alone".into() }
     }
 }
+
+/// Keeps evaluations as isolated as `[explore] evaluations` asks: agents hold
+/// the lock shared, evaluations hold it exclusively.
+struct Gate {
+    alone: bool,
+    serial: bool,
+    lock: RwLock<()>,
+}
+
+impl Gate {
+    fn new(evaluations: &str) -> Gate {
+        Gate { alone: evaluations == "alone", serial: evaluations != "parallel", lock: RwLock::new(()) }
+    }
+    fn agent(&self) -> Option<RwLockReadGuard<'_, ()>> {
+        self.alone.then(|| self.lock.read().unwrap_or_else(|e| e.into_inner()))
+    }
+    fn evaluation(&self) -> Option<RwLockWriteGuard<'_, ()>> {
+        self.serial.then(|| self.lock.write().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+/// A finished attempt, not yet committed: the node, its git tree and its note.
+type Outcome = (Node, String, Value);
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
@@ -105,11 +142,14 @@ pub struct DreamCfg {
     pub normalize: String,
     /// "run" (this run's rounds) or "all" (every run in the repository).
     pub history: String,
+    /// "auto": a `bandit` policy is refitted from measured outcomes (the yield
+    /// model), any other family is tuned by replay. "replay": always replay.
+    pub method: String,
 }
 
 impl Default for DreamCfg {
     fn default() -> Self {
-        DreamCfg { holdout: 1, lam: 0.02, candidates: 300, mode: "cache".into(), normalize: "none".into(), history: "run".into() }
+        DreamCfg { holdout: 1, lam: 0.02, candidates: 300, mode: "cache".into(), normalize: "none".into(), history: "run".into(), method: "auto".into() }
     }
 }
 
@@ -125,7 +165,7 @@ pub struct PoliciesCfg {
 impl Default for PoliciesCfg {
     fn default() -> Self {
         let mut initial = toml::Table::new();
-        initial.insert("family".into(), toml::Value::String("refine_best".into()));
+        initial.insert("family".into(), toml::Value::String(crate::model::BANDIT.into()));
         PoliciesCfg { initial, families: vec![], external: toml::Table::new() }
     }
 }
@@ -171,7 +211,7 @@ pub struct Engine {
     pub registry: Registry,
     pub goal: Goal,
     pub quiet: bool,
-    seen: RefCell<Seen>,
+    seen: Mutex<Seen>,
     external_files: Vec<(String, String)>,
 }
 
@@ -199,6 +239,9 @@ impl Engine {
         anyhow::ensure!(cfg.dream.lam.is_finite() && cfg.dream.lam >= 0.0, "dream.lam must be finite and nonnegative");
         anyhow::ensure!(["none", "root"].contains(&cfg.dream.normalize.as_str()), "dream.normalize must be none or root");
         anyhow::ensure!(["run", "all"].contains(&cfg.dream.history.as_str()), "dream.history must be run or all");
+        anyhow::ensure!(["auto", "replay"].contains(&cfg.dream.method.as_str()), "dream.method must be auto or replay");
+        anyhow::ensure!((1..=64).contains(&cfg.explore.parallel), "explore.parallel must be between 1 and 64");
+        anyhow::ensure!(["alone", "serial", "parallel"].contains(&cfg.explore.evaluations.as_str()), "explore.evaluations must be alone, serial or parallel");
         for timeout in [cfg.agent.timeout, cfg.evaluate.timeout] {
             anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "timeouts must be finite, positive and below 1e9 seconds");
         }
@@ -236,7 +279,7 @@ impl Engine {
                 }
             }
         }
-        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: RefCell::new(seen), external_files })
+        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: Mutex::new(seen), external_files })
     }
 
     fn log(&self, s: &str) {
@@ -256,8 +299,20 @@ impl Engine {
         self.mem.base(&self.run)
     }
 
-    pub fn wt(&self) -> Result<PathBuf> {
-        self.mem.worktree(&self.run)
+    /// The scratch worktree of `lane` (attempts running at once each have one).
+    pub fn wt(&self, lane: usize) -> Result<PathBuf> {
+        self.mem.worktree(&self.run, lane)
+    }
+
+    /// How many attempts are in flight at once. A parameter-space agent proposes
+    /// instantly, so its attempts only overlap if evaluations may.
+    pub fn lanes(&self) -> usize {
+        let x = &self.cfg.explore;
+        if self.agent.space().is_some() && x.evaluations != "parallel" { 1 } else { x.parallel.max(1) }
+    }
+
+    fn seen(&self) -> std::sync::MutexGuard<'_, Seen> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn mode(&self) -> Mode {
@@ -269,12 +324,17 @@ impl Engine {
     }
 
     pub fn evaluate(&self, tree: &str, design: &str, round: u32, nid: usize, reuse: bool) -> Result<EvalResult> {
+        self.evaluate_in(0, tree, design, round, nid, reuse)
+    }
+
+    /// Evaluate `tree` in the worktree of `lane`.
+    pub fn evaluate_in(&self, lane: usize, tree: &str, design: &str, round: u32, nid: usize, reuse: bool) -> Result<EvalResult> {
         if reuse && self.cfg.evaluate.reuse {
-            if let Some((s, st, sha)) = self.seen.borrow().get(design) {
+            if let Some((s, st, sha)) = self.seen().get(design) {
                 return Ok(EvalResult { score: *s, status: st.clone(), note: json!({"score": s, "status": st, "reused": sha}) });
             }
         }
-        let wt = self.wt()?;
+        let wt = self.wt(lane)?;
         self.mem.materialize(&wt, tree)?;
         let mut env = vec![
             ("DREAM_RUN".to_string(), self.run.clone()),
@@ -282,6 +342,7 @@ impl Engine {
             ("DREAM_NODE".into(), nid.to_string()),
             ("DREAM_DESIGN".into(), design.to_string()),
             ("DREAM_WORKTREE".into(), wt.to_string_lossy().into_owned()),
+            ("DREAM_LANE".into(), lane.to_string()),
         ];
         env.extend(self.agent.env(design));
         self.evaluator()?.run(&wt, &env)
@@ -364,6 +425,11 @@ impl Engine {
             self.log(&format!("dream: no history yet, keeping {}", current.repr()));
             return Ok(vec![]);
         }
+        if self.cfg.dream.method != "replay" {
+            if let Some((best, y)) = model::learn(&current, &hist) {
+                return self.dream_model(round, &hist, &current, &best, &y, commit);
+            }
+        }
         let budget = budget.unwrap_or(self.cfg.explore.budget);
         let mode = mode.unwrap_or(self.mode());
         let eff = if self.agent.space().is_some() { mode } else { Mode::Strict };
@@ -382,6 +448,7 @@ impl Engine {
             normalize_root: self.normalize_root(),
             registry: &self.registry,
             families: &fams,
+            threads: crate::par::threads(),
         };
         let ranking = sim::dream(&current, &[], &a)?;
         let (candidate, top) = (&ranking[0].0, &ranking[0].1);
@@ -412,6 +479,34 @@ impl Engine {
             self.mem.commit_policy(&self.run, round, &doc, &self.policy_files())?;
         }
         Ok(ranking)
+    }
+
+    /// Dreaming for a `bandit` policy: no candidate is scored on outcomes that
+    /// were never observed. The policy for `round` carries the yield of each
+    /// kind of move, measured over every recorded attempt.
+    fn dream_model(&self, round: u32, hist: &[Tree], current: &Policy, best: &Policy, y: &model::Yield, commit: bool) -> Result<Vec<(Policy, ReplayResult)>> {
+        let m = current.p("m", model::STRENGTH);
+        let attempts: usize = hist.iter().map(Tree::calls).sum();
+        self.log(&format!("dream r{round}: yield model over {attempts} recorded attempts in {} rounds (weight halves every {} attempts)", hist.len(), fs(Some(current.p("halflife", model::HALFLIFE)))));
+        let mut table = vec![];
+        for b in 0..model::NB {
+            if y.n[b] <= 0.0 {
+                continue;
+            }
+            let (a, c) = y.posterior(b, m);
+            let (lo, hi) = model::interval(a, c, 0.9);
+            self.log(&format!("  {:6} {:52} weight {:6.1}  new best {:5.1}%  (90% interval {:.1}-{:.1}%, prior {:.1}%)", model::name(b), model::describe(b), y.n[b], 100.0 * a / (a + c), 100.0 * lo, 100.0 * hi, 100.0 * model::prior(b)));
+            table.push(json!({"move": model::name(b), "what": model::describe(b), "weight": y.n[b], "credit": y.s[b], "yield": a / (a + c), "interval90": [lo, hi], "prior": model::prior(b)}));
+        }
+        if commit {
+            let doc = json!({
+                "run": self.run, "round": round, "policy": best.spec(), "repr": best.repr(), "method": "model",
+                "why": format!("yield model fitted over {attempts} recorded attempts in {} rounds: measured outcomes only, no replay of unobserved decisions", hist.len()),
+                "model": table,
+            });
+            self.mem.commit_policy(&self.run, round, &doc, &self.policy_files())?;
+        }
+        Ok(vec![])
     }
 
     pub fn replay(&self, policy: &Policy, mode: Option<Mode>, budget: Option<usize>) -> Result<ReplayResult> {
@@ -465,7 +560,7 @@ impl Engine {
         if root.score.is_none() {
             bail!("the root of round {round} did not evaluate ({}):\n{}", root.status, note_output(&res.note));
         }
-        self.seen.borrow_mut().insert(root.design.clone(), (root.score, root.status.clone(), root.sha.clone()));
+        self.seen().insert(root.design.clone(), (root.score, root.status.clone(), root.sha.clone()));
         Ok(root)
     }
 
@@ -481,27 +576,241 @@ impl Engine {
         let budget = budget.unwrap_or(self.cfg.explore.budget);
         anyhow::ensure!(budget > 0 && budget >= self.cfg.explore.min_calls, "budget must be positive and at least explore.min_calls");
         let mut policy = self.policy_for(round)?;
-        self.log(&format!("explore r{round}: {}, budget {budget}", policy.repr()));
+        self.log(&format!("explore r{round}: {}, budget {budget}{}", policy.repr(), self.lanes_note()));
         let root = self.make_root(round, budget, &policy)?;
         self.log(&format!("  r{round} n000 root {} {}", short(&root.design, 24), fs(root.score)));
-        let mut world = LiveWorld { e: self, base_tree: self.mem.tree_of(&self.base()?)? };
-        let quiet = self.quiet;
-        let t = sim::run_tree(&mut policy, &mut world, &root, budget, &self.run, round, self.goal, round as u64, &mut |t, n| {
-            if quiet {
-                return;
-            }
-            let b = t.best().and_then(|b| b.score);
-            let best = match (b, n.score) {
-                (Some(b), Some(s)) if t.cost(s) < t.cost(b) => Some(s),
-                (None, s) => s,
-                (b, _) => b,
-            };
-            println!("  r{round} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
-        })?;
+        let mut t = Tree::new(&self.run, round, budget, self.goal, &policy.repr());
+        t.set_root(root);
+        policy.reset(round as u64);
+        self.search(&mut policy, &mut t, VecDeque::new())?;
         let best = self.promote(&t)?;
         self.log(&format!("  r{round}: {} calls, promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), best.id, fs(best.score), best.score.zip(t.root().score).map_or(0.0, |(b, r)| t.rel(b, r) * 100.0), &best.sha[..10]));
         self.compact(round);
         Ok(t)
+    }
+
+    /// Add `budget` attempts to the latest round's tree. The round's policy is
+    /// driven through the recorded attempts first (zero evaluations), so it is
+    /// in exactly the state it would be in had the round never stopped, then
+    /// continues live. Every recorded attempt stays continuable: nothing is
+    /// lost at a round boundary. Also finishes a round that was killed
+    /// (attempts that were running when it died are run again).
+    pub fn extend(&self, budget: Option<usize>) -> Result<Tree> {
+        let Some(&round) = self.mem.rounds(&self.run)?.last() else { return self.explore(Some(1), budget) };
+        self.replay_history()?;
+        let rec = self.mem.load_tree(&self.run, round)?.ok_or_else(|| anyhow!("round {round} not found"))?;
+        let add = budget.unwrap_or(self.cfg.explore.budget);
+        anyhow::ensure!(add > 0, "budget must be positive");
+        let total = rec.calls() + add;
+        let mut policy = self.policy_for(round)?;
+        self.log(&format!("extend r{round}: {}, {} recorded attempts + {add}{}", policy.repr(), rec.calls(), self.lanes_note()));
+        let recorded = rec.nodes.len();
+        let (mut t, unfinished) = self.redrive(&mut policy, &rec, total)?;
+        self.search(&mut policy, &mut t, unfinished)?;
+        let best = self.promote(&t)?;
+        self.log(&format!("  r{round}: {} calls ({} new), promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), t.nodes.len() - recorded, best.id, fs(best.score), best.score.zip(t.root().score).map_or(0.0, |(b, r)| t.rel(b, r) * 100.0), &best.sha[..10]));
+        self.compact(round);
+        Ok(t)
+    }
+
+    /// `n` steps of search: new rounds, or extensions of the current round
+    /// when `extend` is set (then only `new_round` starts a round, after dreaming).
+    #[allow(clippy::too_many_arguments)]
+    pub fn run(&self, n: usize, dream: bool, budget: Option<usize>, candidates: Option<usize>, mode: Option<Mode>, extend: bool, new_round: bool) -> Result<Vec<Tree>> {
+        if !extend {
+            return self.rounds(n, dream, budget, candidates, mode);
+        }
+        let mut out = vec![];
+        for i in 0..n {
+            if i == 0 && new_round && !self.mem.rounds(&self.run)?.is_empty() {
+                out.extend(self.rounds(1, dream, budget, candidates, mode)?);
+            } else {
+                out.push(self.extend(budget)?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn lanes_note(&self) -> String {
+        match self.lanes() {
+            1 => String::new(),
+            n => format!(", {n} attempts at once (evaluations: {})", self.cfg.explore.evaluations),
+        }
+    }
+
+    /// Rebuild the tree of a recorded round by driving its policy through the
+    /// recorded attempts, showing it at each step exactly what it saw then:
+    /// attempts whose results had not arrived yet are pending. Returns the tree
+    /// and the attempts that never finished (the round was killed).
+    fn redrive(&self, policy: &mut Policy, rec: &Tree, total: usize) -> Result<(Tree, VecDeque<usize>)> {
+        let mut t = Tree::new(&self.run, rec.round, total, self.goal, &policy.repr());
+        let mut root = rec.root().clone();
+        root.n_exp = 0;
+        t.set_root(root);
+        policy.reset(rec.round as u64);
+        let finished = |j: usize| rec.nodes[j].status != PENDING;
+        let mut shown = vec![false; rec.nodes.len()];
+        for i in 1..=rec.nodes.len() {
+            for (j, shown) in shown.iter_mut().enumerate().take(i).skip(1) {
+                if !*shown && finished(j) && (i == rec.nodes.len() || rec.nodes[j].visible() <= i) {
+                    *shown = true;
+                    t.resolve(rec.nodes[j].clone());
+                }
+            }
+            let Some(r) = rec.nodes.get(i) else { break };
+            let again = "start a new round instead (git dream run --new-round)";
+            let Some(p) = policy.select(&t)? else { bail!("the policy of round {} stops before reproducing its {} recorded attempts; {again}", rec.round, rec.calls()) };
+            if Some(p) != r.parent || Some(t.nodes[p].n_exp) != r.k {
+                bail!("the policy of round {} no longer reproduces its recorded attempts (it diverges at attempt {i}); {again}", rec.round);
+            }
+            t.nodes[p].n_exp += 1;
+            let mut n = Node::pending(i, p, r.k.unwrap());
+            n.sha = r.sha.clone();
+            t.add(n);
+        }
+        Ok((t, (1..rec.nodes.len()).filter(|&j| !finished(j)).collect()))
+    }
+
+    /// Run the policy on `t` until it stops or the tree's budget is spent, with
+    /// up to [`Engine::lanes`] attempts in flight. `unfinished` attempts (already
+    /// in `t`, pending) are run first.
+    ///
+    /// This thread chooses attempts and writes every commit, ref and note; an
+    /// attempt's own thread runs the agent and the evaluator in the worktree of
+    /// its lane. When evaluations must run alone, attempts go in waves: all
+    /// lanes are chosen together once nothing is running. Otherwise a lane is
+    /// refilled as soon as it is free. After an error nothing new is started,
+    /// and the attempts still running are recorded before the error is returned.
+    fn search(&self, policy: &mut Policy, t: &mut Tree, mut unfinished: VecDeque<usize>) -> Result<()> {
+        let lanes = self.lanes();
+        for lane in 0..lanes {
+            self.wt(lane)?;
+        }
+        let base_tree = self.mem.tree_of(&self.base()?)?;
+        let gate = Gate::new(&self.cfg.explore.evaluations);
+        let (tx, rx) = mpsc::channel::<(usize, Result<Outcome>)>();
+        let mut free: Vec<usize> = (0..lanes).rev().collect();
+        let mut flying = 0;
+        let mut failed: Option<anyhow::Error> = None;
+        std::thread::scope(|s| loop {
+            if failed.is_none() && (flying == 0 || !gate.alone) {
+                let mut batch = vec![];
+                while batch.len() < free.len() {
+                    match self.start(policy, t, &mut unfinished, lanes) {
+                        Ok(Some(id)) => batch.push(id),
+                        Ok(None) => break,
+                        Err(e) => {
+                            failed = Some(e);
+                            break;
+                        }
+                    }
+                }
+                // what each of them is told: the tree with all of them started
+                let view = Arc::new(t.clone());
+                for id in batch {
+                    let lane = free.pop().unwrap();
+                    flying += 1;
+                    let (tx, view, gate, base_tree) = (tx.clone(), view.clone(), &gate, &base_tree);
+                    s.spawn(move || {
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.attempt(gate, lane, &view, id, base_tree)));
+                        let _ = tx.send((lane, r.unwrap_or_else(|_| Err(anyhow!("attempt n{id:03} panicked")))));
+                    });
+                }
+            }
+            if flying == 0 {
+                break;
+            }
+            let (lane, outcome) = rx.recv().expect("this thread holds a sender");
+            flying -= 1;
+            free.push(lane);
+            if let Err(e) = outcome.and_then(|o| self.record(t, o)) {
+                failed.get_or_insert(e);
+            }
+        });
+        failed.map_or(Ok(()), Err)
+    }
+
+    /// The next attempt to start, added to `t` as pending: one that never
+    /// finished, else the policy's pick. None: budget spent, or the policy has
+    /// nothing to continue (yet).
+    fn start(&self, policy: &mut Policy, t: &mut Tree, unfinished: &mut VecDeque<usize>, lanes: usize) -> Result<Option<usize>> {
+        if let Some(id) = unfinished.pop_front() {
+            return Ok(Some(id));
+        }
+        if t.calls() >= t.budget {
+            return Ok(None);
+        }
+        let Some(p) = policy.select(t)? else { return Ok(None) };
+        anyhow::ensure!(t.nodes[p].status != PENDING, "the policy continued attempt n{p:03}, which is still running");
+        let k = t.nodes[p].n_exp;
+        t.nodes[p].n_exp += 1;
+        let mut n = Node::pending(t.nodes.len(), p, k);
+        if lanes > 1 {
+            // Recorded before it runs, so git always holds every attempt that was
+            // started: a killed round has no gaps and its policy can be driven through it again.
+            n.sha = self.mem.commit_attempt(t, &n, &self.mem.tree_of(&t.nodes[p].sha)?, &t.nodes[p].sha, None)?;
+        }
+        let id = n.id;
+        t.add(n);
+        Ok(Some(id))
+    }
+
+    /// Commit a finished attempt and put its result into the tree.
+    fn record(&self, t: &mut Tree, (mut n, tree, note): Outcome) -> Result<()> {
+        let parent_sha = t.nodes[n.parent.unwrap()].sha.clone();
+        // attempts chosen from now on know this result
+        n.seen = t.nodes.len();
+        n.sha = self.mem.commit_attempt(t, &n, &tree, &parent_sha, Some(&note))?;
+        if n.status != NOOP {
+            self.seen().entry(n.design.clone()).or_insert((n.score, n.status.clone(), n.sha.clone()));
+        }
+        if !self.quiet {
+            print_attempt(t, &n);
+        }
+        t.resolve(n);
+        Ok(())
+    }
+
+    /// One attempt, in the worktree of `lane`: run the agent on the parent,
+    /// evaluate what it made. `t` is the tree as it was when the attempt started.
+    fn attempt(&self, gate: &Gate, lane: usize, t: &Tree, nid: usize, base_tree: &str) -> Result<Outcome> {
+        let (parent, k) = (t.nodes[nid].parent.unwrap(), t.nodes[nid].k.unwrap());
+        let p = &t.nodes[parent];
+        let (tree, design, change, parent_tree, agent_note) = match &self.agent {
+            Agent::Space(s) => {
+                let (design, change) = s.propose(&p.design, k);
+                (self.mem.tree_with_files(Some(base_tree), &self.params_file(s, &design))?, design, change, None, None)
+            }
+            Agent::Command(c) => {
+                let pt = self.mem.tree_of(&p.sha)?;
+                let _working = gate.agent();
+                let (tree, msg, note) = run_agent(self, c, lane, t, parent, k, &pt)?;
+                (tree.clone(), tree, msg, Some(pt), Some(note))
+            }
+        };
+        let mut n = Node::new(nid, Some(parent), Some(k), design.clone(), None, OK, change);
+        let protected_changed = if parent_tree.is_some() && !self.cfg.evaluate.protected.is_empty() {
+            let mut args = vec!["diff", "--name-only", base_tree, tree.as_str(), "--"];
+            args.extend(self.cfg.evaluate.protected.iter().map(String::as_str));
+            self.mem.git(&args)?
+        } else { String::new() };
+        let mut note = if !protected_changed.is_empty() {
+            n.status = FAIL.into();
+            json!({"status": FAIL, "exit": "protected paths changed", "stderr": protected_changed})
+        } else if parent_tree.as_deref() == Some(tree.as_str()) {
+            n.status = NOOP.into();
+            json!({"status": NOOP})
+        } else {
+            let _isolated = gate.evaluation();
+            let r = self.evaluate_in(lane, &tree, &design, t.round, nid, true)?;
+            n.score = r.score;
+            n.status = if r.score.is_none() && r.status == OK { FAIL.into() } else { r.status };
+            r.note
+        };
+        if let Some(a) = agent_note {
+            note["agent"] = a;
+        }
+        Ok((n, tree, note))
     }
 
     /// Pack the round's loose objects (and every `gc_every` rounds run git gc).
@@ -537,12 +846,38 @@ impl Engine {
                 }
             }
             if !top.iter().any(|n| n.design == t.root().design) { top.push(t.root()); }
+            // Every re-measurement is independent: they run at once when evaluations may.
+            let reps = self.cfg.evaluate.confirm_reps;
+            let mut jobs = vec![];
+            for n in &top {
+                let tree = self.mem.tree_of(&n.sha)?;
+                jobs.extend((0..reps).map(|_| (*n, tree.clone())));
+            }
+            let lanes = if self.cfg.explore.evaluations == "parallel" { self.lanes().min(jobs.len()) } else { 1 };
+            for lane in 0..lanes {
+                self.wt(lane)?;
+            }
+            let measure = |lane: usize, (n, tree): &(&Node, String)| self.evaluate_in(lane, tree, &n.design, t.round, n.id, false);
+            let mut measured = if lanes > 1 {
+                crate::par::map(lanes, &jobs, measure)
+            } else {
+                // one at a time: stop at the first evaluation that cannot run at all
+                let mut v: Vec<Result<EvalResult>> = vec![];
+                for j in &jobs {
+                    v.push(measure(0, j));
+                    if v.last().unwrap().is_err() {
+                        break;
+                    }
+                }
+                v
+            }
+            .into_iter();
             let mut means = vec![];
             for n in &top {
                 let mut vals = vec![];
                 let mut results = vec![];
-                for _ in 0..self.cfg.evaluate.confirm_reps {
-                    let res = self.evaluate(&self.mem.tree_of(&n.sha)?, &n.design, t.round, n.id, false)?;
+                for res in measured.by_ref().take(reps) {
+                    let res = res?;
                     vals.push(res.score);
                     results.push(res.note);
                 }
@@ -596,54 +931,14 @@ impl Engine {
     }
 }
 
-struct LiveWorld<'a> {
-    e: &'a Engine,
-    base_tree: String,
-}
-
-impl World for LiveWorld<'_> {
-    fn step(&mut self, t: &Tree, parent: usize, k: usize) -> Result<Node> {
-        let e = self.e;
-        let p = &t.nodes[parent];
-        let nid = t.nodes.len();
-        let (tree, design, change, parent_tree, agent_note) = match &e.agent {
-            Agent::Space(s) => {
-                let (design, change) = s.propose(&p.design, k);
-                (e.mem.tree_with_files(Some(&self.base_tree), &e.params_file(s, &design))?, design, change, None, None)
-            }
-            Agent::Command(c) => {
-                let pt = e.mem.tree_of(&p.sha)?;
-                let (tree, msg, note) = run_agent(e, c, t, parent, k, &pt)?;
-                (tree.clone(), tree, msg, Some(pt), Some(note))
-            }
-        };
-        let mut n = Node::new(nid, Some(parent), Some(k), design.clone(), None, OK, change);
-        let protected_changed = if parent_tree.is_some() && !e.cfg.evaluate.protected.is_empty() {
-            let mut args = vec!["diff", "--name-only", self.base_tree.as_str(), tree.as_str(), "--"];
-            args.extend(e.cfg.evaluate.protected.iter().map(String::as_str));
-            e.mem.git(&args)?
-        } else { String::new() };
-        let mut note = if !protected_changed.is_empty() {
-            n.status = FAIL.into();
-            json!({"status": FAIL, "exit": "protected paths changed", "stderr": protected_changed})
-        } else if parent_tree.as_deref() == Some(tree.as_str()) {
-            n.status = NOOP.into();
-            json!({"status": NOOP})
-        } else {
-            let r = e.evaluate(&tree, &design, t.round, nid, true)?;
-            n.score = r.score;
-            n.status = if r.score.is_none() && r.status == OK { FAIL.into() } else { r.status };
-            r.note
-        };
-        if let Some(a) = agent_note {
-            note["agent"] = a;
-        }
-        n.sha = e.mem.commit_attempt(t, &n, &tree, &p.sha, Some(&note))?;
-        if n.status != NOOP {
-            e.seen.borrow_mut().entry(design).or_insert((n.score, n.status.clone(), n.sha.clone()));
-        }
-        Ok(n)
-    }
+fn print_attempt(t: &Tree, n: &Node) {
+    let b = t.best().and_then(|b| b.score);
+    let best = match (b, n.score) {
+        (Some(b), Some(s)) if t.cost(s) < t.cost(b) => Some(s),
+        (None, s) => s,
+        (b, _) => b,
+    };
+    println!("  r{} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", t.round, n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
 }
 
 /// Where, inside the scratch worktree, git-dream puts the files it hands a
@@ -654,8 +949,8 @@ pub const AGENT_DIR: &str = ".dream-agent";
 const HISTORY_FILE: &str = "history.md";
 const MESSAGE_FILE: &str = "message.md";
 
-fn run_agent(e: &Engine, c: &CommandAgent, t: &Tree, parent: usize, k: usize, parent_tree: &str) -> Result<(String, String, Value)> {
-    let wt = e.wt()?;
+fn run_agent(e: &Engine, c: &CommandAgent, lane: usize, t: &Tree, parent: usize, k: usize, parent_tree: &str) -> Result<(String, String, Value)> {
+    let wt = e.wt(lane)?;
     e.mem.materialize(&wt, parent_tree)?;
     let dir = wt.join(AGENT_DIR);
     std::fs::create_dir_all(&dir)?;
@@ -666,7 +961,7 @@ fn run_agent(e: &Engine, c: &CommandAgent, t: &Tree, parent: usize, k: usize, pa
     let mut earlier: Vec<Tree> = e.history()?.into_iter().filter(|h| h.run != e.run || h.round < t.round).collect();
     earlier.sort_by_key(|h| h.run == e.run);
     let trees: Vec<&Tree> = earlier.iter().chain([t]).collect();
-    let failed: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != OK && n.status != NOOP).map(|n| n.sha.as_str()).collect();
+    let failed: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != OK && n.status != NOOP && n.status != PENDING).map(|n| n.sha.as_str()).collect();
     let notes = e.mem.notes_of(&failed)?;
     std::fs::write(&ctx, history_context(&trees, parent, k, &notes))?;
     let context = agent_context(t, parent, k);
@@ -682,6 +977,7 @@ fn run_agent(e: &Engine, c: &CommandAgent, t: &Tree, parent: usize, k: usize, pa
         ("DREAM_MESSAGE_FILE".into(), msgf.to_string_lossy().into_owned()),
         ("DREAM_PROMPT".into(), format!("{}\n\n{context}", c.prompt.trim()).trim().to_string()),
         ("DREAM_WORKTREE".into(), wt.to_string_lossy().into_owned()),
+        ("DREAM_LANE".into(), lane.to_string()),
     ];
     let r = sh(&c.command, &wt, &env, c.timeout)?;
     let msg = std::fs::read_to_string(&msgf).map(|s| s.trim().to_string()).unwrap_or_default();
@@ -704,12 +1000,22 @@ pub fn agent_context(t: &Tree, parent: usize, k: usize) -> String {
     for a in path.iter().rev() {
         s += &format!("- n{:03} {} {}: {}\n", a.id, a.status, fs(a.score), short(summary(&a.change), 200));
     }
-    let kids = t.children(p.id);
-    if !kids.is_empty() {
+    // this attempt itself is in the tree already, as a pending continuation #k
+    let kids: Vec<&Node> = t.children(p.id).into_iter().filter(|c| c.k != Some(k)).collect();
+    let (running, tried): (Vec<&Node>, Vec<&Node>) = kids.into_iter().partition(|c| c.status == PENDING);
+    if !tried.is_empty() {
         s += "\n## Already tried from this attempt\n";
-        for c in kids {
+        for c in tried {
             s += &format!("- n{:03} {} {}: {}\n", c.id, c.status, fs(c.score), short(summary(&c.change), 200));
         }
+    }
+    if !running.is_empty() {
+        s += &format!(
+            "\n## Being tried from this attempt right now\n\n{} other agent{} started from this same attempt at the same time as you and cannot see your work. \
+             The obvious next step is the one they will most likely take: prefer a change they are unlikely to make.\n",
+            running.len(),
+            if running.len() == 1 { "" } else { "s" }
+        );
     }
     if let Some(b) = t.best() {
         if b.id != p.id {
@@ -764,8 +1070,14 @@ pub fn history_context(trees: &[&Tree], parent: usize, k: usize, notes: &HashMap
     for t in trees {
         let best = t.best().map_or(String::new(), |b| format!(", best n{:03} {}", b.id, fs(b.score)));
         let run = if multi { format!("Run {}, round", t.run) } else { "Round".into() };
-        s += &format!("\n## {run} {} ({} attempt{}{best})\n", t.round, t.calls(), if t.calls() == 1 { "" } else { "s" });
-        for n in &t.nodes {
+        // attempts without a result yet (running now, or cut off when a run was killed) have nothing to show
+        let done = t.nodes.iter().skip(1).filter(|n| n.status != PENDING).count();
+        // (the reader's own attempt is one of them: it is not "more")
+        let own = usize::from(std::ptr::eq(*t, *cur) && t.nodes.iter().any(|n| n.status == PENDING && n.parent == Some(parent) && n.k == Some(k)));
+        let running = t.calls() - done - own;
+        let more = if running > 0 { format!(", {running} more without a result yet") } else { String::new() };
+        s += &format!("\n## {run} {} ({done} attempt{}{best}{more})\n", t.round, if done == 1 { "" } else { "s" });
+        for n in t.nodes.iter().filter(|n| n.status != PENDING) {
             let note = notes.get(&n.sha);
             let result = match n.status.as_str() {
                 OK => format!("ok {}", fs(n.score)),

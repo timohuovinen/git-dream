@@ -16,5 +16,34 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = { version = "0.9", features = ["preserve_order"] }
 
+# Benchmark and reporting programs live in benchmarks/, apart from the projects in
+# examples/. They are still built and run as Cargo examples:
+#   cargo run --release --example compare -- --seeds 100
+[[example]]
+name = "compare"
+path = "benchmarks/compare.rs"
+
+[[example]]
+name = "hashgrid"
+path = "benchmarks/hashgrid.rs"
+
+[[example]]
+name = "fidelity"
+path = "benchmarks/fidelity.rs"
+test = true   # its analysis has unit tests; `cargo test` runs them
+
+[[example]]
+name = "score"
+path = "benchmarks/score.rs"
+
+[[example]]
+name = "summarize"
+path = "benchmarks/summarize.rs"
+
+# An external exploration policy, as a program (see README, "Writing new policies").
+[[example]]
+name = "patient"
+path = "policies/patient.rs"
+
 [profile.release]
 opt-level = 3

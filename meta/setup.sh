@@ -33,7 +33,7 @@ cargo build --release --locked -q --examples
 mkdir -p meta/reference
 ./target/release/examples/compare --seeds "${META_SEEDS:-30}" --first-seed "${META_FIRST_SEED:-50000}" \
   > meta/reference/compare.jsonl
-python3 meta/score.py meta/reference/compare.jsonl
+./target/release/examples/score meta/reference/compare.jsonl
 echo
 echo "pinned binary: $pin/bin/git-dream"
 echo "now: git add meta && git commit -m 'meta: reference output' && $pin/bin/git-dream run -n 3 --config meta/policy.toml"

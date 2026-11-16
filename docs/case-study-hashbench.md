@@ -1,10 +1,10 @@
 # Case study: Dream-RSI on git for high-load hash tables
 
-> This is the experiment `git-dream` grew out of. It was run with the research prototype in [`research/hashbench/`](../research/hashbench/), inside a private hash-table benchmark crate (`hashbench`). The `git-dream` tool ([`src/`](../src/), Rust) is that prototype rewritten and made repository-agnostic, and [`examples/hashbench/`](../examples/hashbench/) expresses the same task as a `.git-dream.toml`. Paths and commands below refer to the original setup. The current Rust implementation adds a held-out deployment gate, exploration floors, and fresh-only confirmation; those changes were not used to obtain the archived results. See the [current validation protocol](validation.md) and [configuration changes](compatibility.md).
+> This is the experiment `git-dream` grew out of. It was run with a Python research prototype, inside a private hash-table benchmark crate (`hashbench`). The prototype's scripts and raw outputs are no longer in the working tree: they are in this repository's history up to commit `7d0167c` (for example `git show 7d0167c:research/hashbench/dream.py`). The evaluator source and the benchmark patch are in [`examples/hashbench/`](../examples/hashbench/), and the oracle grid in [`examples/hashbench/evidence/`](../examples/hashbench/evidence/). The `git-dream` tool ([`src/`](../src/), Rust) is that prototype rewritten and made repository-agnostic, and [`examples/hashbench/`](../examples/hashbench/) expresses the same task as a `.git-dream.toml`. Paths and commands below refer to the original setup. The current Rust implementation adds a held-out deployment gate, exploration floors, and fresh-only confirmation; those changes were not used to obtain the archived results. See the [current validation protocol](validation.md) and [configuration changes](compatibility.md).
 
 This is a working, minimal re-creation of **Dream-RSI** ("Recursive Self-Improvement through Evolving Worlds", Google / Google DeepMind et al., 2026, [dream-rsi.com](https://www.dream-rsi.com/)). It uses **git as the only experimental memory**. The loop is applied to a real optimisation task: finding the fastest fixed-capacity open-addressing hash-table design at 95–98% load. The hash tables come from `hashbench/`.
 
-Code (original layout): a worktree `dream-rsi/` on branch `dream/main` of the `hashbench` repository. Entry point: [`dream.py`](../research/hashbench/dream.py). The hashbench changes it needed are in [`hashbench-funnel-simd-groups.patch`](../research/hashbench/hashbench-funnel-simd-groups.patch) and [`dream-eval.rs`](../research/hashbench/dream-eval.rs).
+Code (original layout): a worktree `dream-rsi/` on branch `dream/main` of the `hashbench` repository. Entry point: `dream.py`. The hashbench changes it needed are in [`hashbench-funnel-simd-groups.patch`](../examples/hashbench/hashbench-funnel-simd-groups.patch) and [`dream-eval.rs`](../examples/hashbench/dream-eval.rs).
 
 ## TL;DR
 
@@ -32,8 +32,8 @@ The mapping used here:
 
 | Dream-RSI concept | This implementation |
 |---|---|
-| Discovery agent (LLM coding agent in the paper) | `space.agent(design, k)`: deterministic local mutation, the k-th proposal from a design ([space.py](../research/hashbench/space.py)) |
-| Fixed evaluator | `target/release/dream-eval` (Rust, [dream-eval.rs](../research/hashbench/dream-eval.rs)) |
+| Discovery agent (LLM coding agent in the paper) | `space.agent(design, k)`: deterministic local mutation, the k-th proposal from a design (`space.py`) |
+| Fixed evaluator | `target/release/dream-eval` (Rust, [dream-eval.rs](../examples/hashbench/dream-eval.rs)) |
 | Attempt | one **commit**; its tree = frozen world (`tag dream/world`) + `dream/attempt.json` |
 | Parent attempt | the commit's **parent** (a round's root has the previous round's best as parent, so all rounds form one DAG) |
 | Outcome / score | **commit-message trailers** (`Dream-Score`, `Dream-Status`, `Dream-Design`, …) |
@@ -41,7 +41,7 @@ The mapping used here:
 | Discovery tree | hidden refs `refs/dream/<arm>/r<NN>/n<NNN>` |
 | Exploration path | branch `dream/<arm>/r<NN>-best`; `git log` on it shows the lineage |
 | Exploration policy (versioned code) | branch `dream/<arm>/policy`: one commit per round with `policy.json` + snapshot of `policies.py`, tags `dream/<arm>/policy-r<NN>` |
-| Dreaming (offline replay) | [sim.py](../research/hashbench/sim.py): `ReplayWorld`, `replay`, `dream` |
+| Dreaming (offline replay) | `sim.py`: `ReplayWorld`, `replay`, `dream` |
 | Policy-development agent | (a) automatic: random search over parametric policy families; (b) inspection of recorded trees followed by development of a new family |
 
 An attempt commit, exactly as stored:
@@ -122,7 +122,7 @@ In words: a 2% speedup is worth one full round of compute. Policies may stop ear
 
 ## 4. Policies
 
-All policies share one interface: `select(tree) -> node_id | None`. They live in [policies.py](../research/hashbench/policies.py) and are serialised as `{"family", "params"}`.
+All policies share one interface: `select(tree) -> node_id | None`. They live in `policies.py` and are serialised as `{"family", "params"}`.
 
 - **π0 `refine_best`** (hand-written start, like the paper's): always continue the best attempt, spend the whole budget.
 - **v1 families**:
@@ -196,7 +196,7 @@ What this says:
 
 ### 5.5 Fidelity: does replay rank policies the way the world does?
 
-I took 401 policies (π0 + 400 random v1/v2) and replayed each over the 10 live dream-arm trees. I compared that with running the same policy from the same roots in the oracle world ([fidelity-dream-r10.json](../research/hashbench/results/fidelity-dream-r10.json)):
+I took 401 policies (π0 + 400 random v1/v2) and replayed each over the 10 live dream-arm trees. I compared that with running the same policy from the same roots in the oracle world (`results/fidelity-dream-r10.json`). This check used one history and gives no intervals; [`benchmarks/fidelity.rs`](../benchmarks/fidelity.rs) is its replacement for the Rust tool, and its full evaluation has not been run yet. The original numbers:
 
 | | strict | cache |
 |---|---|---|
@@ -251,6 +251,6 @@ git notes --ref=dream show dream/dream/r08-best         # full evaluator output 
 
 Starting from scratch is just deleting the refs: `git for-each-ref --format='%(refname)' refs/dream | xargs -n1 git update-ref -d`.
 
-Files: [space.py](../research/hashbench/space.py) (design grid and agent) · [gitmem.py](../research/hashbench/gitmem.py) (git memory) · [policies.py](../research/hashbench/policies.py) · [sim.py](../research/hashbench/sim.py) (worlds, replay, dream) · [dream.py](../research/hashbench/dream.py) (CLI and protocols) · [dream-eval.rs](../research/hashbench/dream-eval.rs) · results in [results/](../research/hashbench/results/).
+Files (in git history at `7d0167c`, under `research/hashbench/`): `space.py` (design grid and agent) · `gitmem.py` (git memory) · `policies.py` · `sim.py` (worlds, replay, dream) · `dream.py` (CLI and protocols) · `results/` (live log, synthetic replicates, fidelity study). Still in the working tree: [dream-eval.rs](../examples/hashbench/dream-eval.rs), the [patch](../examples/hashbench/hashbench-funnel-simd-groups.patch) and the oracle grid [oracle.jsonl](../examples/hashbench/evidence/oracle.jsonl).
 
 **Repository notes.** All work is on branch `dream/main` (from `dream/base`, a snapshot of `hashbench/` at 11:00) in a separate worktree. `hashbench/`'s own working tree and its unborn `master` are untouched, because another session is developing there. Live evaluations were pinned to core 3, and the synthetic and fidelity runs to cores 8–15.
