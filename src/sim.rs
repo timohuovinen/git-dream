@@ -19,7 +19,7 @@
 use crate::agents::SpaceAgent;
 use crate::policies::{Family, Policy, Registry};
 use crate::rng::Rng;
-use crate::tree::{Goal, Node, Tree, MISS, OK};
+use crate::tree::{Goal, Node, Tree, MISS, OK, PENDING};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -82,7 +82,7 @@ impl<'a> ReplayWorld<'a> {
                         e.0 += v;
                         e.1 += 1;
                     }
-                    None if n.status != MISS => {
+                    None if n.status != MISS && n.status != PENDING => {
                         failed.insert(n.design.clone(), n.status.clone());
                     }
                     None => {}
@@ -106,7 +106,8 @@ impl World for ReplayWorld<'_> {
         let p = &t.nodes[parent];
         let nid = t.nodes.len();
         if let Some(pr) = p.rec {
-            if let Some(&i) = self.edges.get(&(pr, k)) {
+            // an attempt that never finished (a killed run) recorded no outcome
+            if let Some(&i) = self.edges.get(&(pr, k)).filter(|&&i| rec.nodes[i].status != PENDING) {
                 let r = &rec.nodes[i];
                 let mut n = Node::new(nid, Some(parent), Some(k), r.design.clone(), r.score, &r.status, r.change.clone());
                 n.sha = r.sha.clone();
@@ -154,6 +155,46 @@ pub fn run_tree(policy: &mut Policy, world: &mut dyn World, root: &Node, budget:
         t.add(n);
     }
     Ok(t)
+}
+
+/// [`run_tree`] with `parallel` attempts in flight: the policy picks that many
+/// continuations before any of them has a result (each pick sees the earlier
+/// ones as pending attempts), then all of them are resolved. This is what a
+/// live round with `[explore] parallel` does when its evaluations run alone;
+/// with `parallel` = 1 it is `run_tree`. One wave costs the time of one attempt.
+#[allow(clippy::too_many_arguments)]
+pub fn run_waves(policy: &mut Policy, world: &mut dyn World, root: &Node, budget: usize, run: &str, round: u32, goal: Goal, seed: u64, parallel: usize) -> Result<Tree> {
+    let mut t = Tree::new(run, round, budget, goal, &policy.repr());
+    let mut r = root.clone();
+    r.id = 0;
+    r.parent = None;
+    r.k = None;
+    r.n_exp = 0;
+    r.rec = Some(0);
+    t.set_root(r);
+    policy.reset(seed);
+    loop {
+        let first = t.nodes.len();
+        while t.calls() < budget && t.nodes.len() - first < parallel.max(1) {
+            let Some(nid) = policy.select(&t)? else { break };
+            let k = t.nodes[nid].n_exp;
+            t.nodes[nid].n_exp += 1;
+            t.add(Node::pending(t.nodes.len(), nid, k));
+        }
+        let end = t.nodes.len();
+        if end == first {
+            return Ok(t);
+        }
+        for id in first..end {
+            let (parent, k) = (t.nodes[id].parent.unwrap(), t.nodes[id].k.unwrap());
+            let mut n = world.step(&t, parent, k)?;
+            n.id = id;
+            n.parent = Some(parent);
+            n.k = Some(k);
+            n.seen = end;
+            t.resolve(n);
+        }
+    }
 }
 
 pub fn gain(t: &Tree) -> f64 {
@@ -209,6 +250,9 @@ pub struct DreamArgs<'a> {
     pub normalize_root: bool,
     pub registry: &'a Registry,
     pub families: &'a [&'a Family],
+    /// Candidates replayed at once (each replay is an independent computation;
+    /// the ranking does not depend on this).
+    pub threads: usize,
 }
 
 /// Score the deployed policy, `extra` policies and sampled ones by replay over
@@ -224,13 +268,17 @@ pub fn dream(current: &Policy, extra: &[Policy], a: &DreamArgs) -> Result<Vec<(P
             cands.push(a.registry.sample(&mut rng, a.families));
         }
     }
-    let mut scored = vec![];
+    let mut distinct = vec![];
     let mut seen = std::collections::HashSet::new();
     for (i, mut c) in cands.into_iter().enumerate() {
         c.set_min_calls(a.min_calls);
         if !seen.insert(c.repr()) { continue; }
-        let r = replay(&c, a.history, a.budget, a.lam, a.agent, a.mode, a.normalize_root, false)?;
-        scored.push((i, c, r));
+        distinct.push((i, c));
+    }
+    let results = crate::par::map(a.threads, &distinct, |_, (_, c)| replay(c, a.history, a.budget, a.lam, a.agent, a.mode, a.normalize_root, false));
+    let mut scored = vec![];
+    for ((i, c), r) in distinct.into_iter().zip(results) {
+        scored.push((i, c, r?));
     }
     scored.sort_by(|x, y| y.2.j.total_cmp(&x.2.j).then(x.0.cmp(&y.0)));
     Ok(scored.into_iter().map(|(_, c, r)| (c, r)).collect())
@@ -313,9 +361,38 @@ mod tests {
         }
         let cur = reg.make(&serde_json::json!({"family": "refine_best"})).unwrap();
         let fams = reg.searchable(&[]);
-        let a = DreamArgs { history: &hist, budget: 15, lam: 0.02, candidates: 60, min_calls: 0, seed: 0, agent: Some(&agent), mode: Mode::Cache, normalize_root: false, registry: &reg, families: &fams };
+        let a = DreamArgs { history: &hist, budget: 15, lam: 0.02, candidates: 60, min_calls: 0, seed: 0, agent: Some(&agent), mode: Mode::Cache, normalize_root: false, registry: &reg, families: &fams, threads: 1 };
         let ranking = dream(&cur, &[], &a).unwrap();
         let jcur = ranking.iter().find(|(c, _)| c.repr() == cur.repr()).unwrap().1.j;
         assert!(ranking[0].1.j >= jcur);
+        // replaying candidates on several threads gives the same ranking
+        let key = |r: &[(Policy, ReplayResult)]| r.iter().map(|(c, x)| (c.repr(), x.j.to_bits(), x.calls)).collect::<Vec<_>>();
+        assert_eq!(key(&dream(&cur, &[], &DreamArgs { threads: 4, ..a }).unwrap()), key(&ranking));
+    }
+
+    #[test]
+    fn waves_of_one_are_a_serial_round() {
+        let knobs: toml::Table = toml::from_str("x = [0,1,2,3,4,5,6,7,8,9,10,11]\ny = [0,1,2,3,4,5,6,7,8,9,10,11]").unwrap();
+        let start: toml::Table = toml::from_str("x = 0\ny = 0").unwrap();
+        let agent = SpaceAgent::new(&knobs, &start, "", "p.json", 0.3, 0.2).unwrap();
+        let reg = Registry::builtin();
+        let root = Node::new(0, None, None, agent.root(), Some(59.0), OK, "");
+        for spec in [serde_json::json!({"family": "bandit"}), serde_json::json!({"family": "softmax", "params": {"T": 0.05}}), serde_json::json!({"family": "refine_best"})] {
+            let mut p = reg.make(&spec).unwrap();
+            let serial = run_tree(&mut p, &mut Quadratic(&agent), &root, 30, "r", 1, Goal::Min, 3, &mut |_, _| {}).unwrap();
+            let one = run_waves(&mut p, &mut Quadratic(&agent), &root, 30, "r", 1, Goal::Min, 3, 1).unwrap();
+            assert_eq!(one.nodes.iter().map(|n| Node { seen: 0, rec: None, ..n.clone() }).collect::<Vec<_>>(), serial.nodes.iter().map(|n| Node { rec: None, ..n.clone() }).collect::<Vec<_>>(), "{spec}");
+            assert_eq!(one.best_trace, serial.best_trace);
+            // four at once: the same budget, every attempt resolved, chosen in waves
+            let four = run_waves(&mut p, &mut Quadratic(&agent), &root, 30, "r", 1, Goal::Min, 3, 4).unwrap();
+            assert_eq!(four.calls(), 30);
+            assert!(four.nodes.iter().all(|n| n.status == OK && n.score.is_some()));
+            for (i, n) in four.nodes.iter().enumerate().skip(1) {
+                let wave_end = (((i - 1) / 4 + 1) * 4 + 1).min(31);
+                assert_eq!(n.visible(), wave_end, "attempt {i}");
+                assert!(n.parent.unwrap() < ((i - 1) / 4) * 4 + 1, "attempt {i} continues one that had finished");
+                assert_eq!(n.k, Some(four.nodes[..i].iter().filter(|m| m.parent == n.parent).count()));
+            }
+        }
     }
 }

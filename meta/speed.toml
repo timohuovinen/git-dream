@@ -7,7 +7,7 @@ kind = "command"
 command = 'opencode run --auto --archived --title "dream $DREAM_RUN" ${OPENCODE_MODEL:+-m "$OPENCODE_MODEL"} "$DREAM_PROMPT"'
 prompt = """
 Track: SPEED. Read AGENTS.md first, then follow its "Speed track" section.
-Goal: make `examples/compare` (replay, dreaming, policies, tree code) faster while
+Goal: make the `compare` benchmark, `benchmarks/compare.rs` (replay, dreaming, policies, tree code) faster while
 its output stays byte-identical to meta/reference/compare.jsonl.
 Make ONE focused change. Profile before optimising (e.g. `perf record`).
 """
@@ -19,7 +19,7 @@ goal = "min"
 timeout = 3600
 remeasure_root = true    # wall time drifts with machine load
 confirm_top = 2
-protected = ["meta", "examples/compare.rs", "tests", "research", "Cargo.lock"]
+protected = ["meta", "benchmarks/compare.rs", "tests", "examples/hashbench/evidence", "examples/log-count/evidence", "benchmarks/evidence", "Cargo.lock"]
 
 [explore]
 budget = 4

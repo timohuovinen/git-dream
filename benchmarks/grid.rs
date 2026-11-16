@@ -1,0 +1,52 @@
+//! The measured landscape of the hashbench case study, shared by hashgrid.rs
+//! and fidelity.rs: 982 hash-table designs (examples/hashbench/evidence/oracle.jsonl),
+//! of which about 4 in 10 fail ("full"), and the parameter-space agent that walks them.
+#![allow(dead_code)]
+use anyhow::Result;
+use git_dream::agents::SpaceAgent;
+use git_dream::rng::Rng;
+use serde_json::Value;
+use std::collections::HashMap;
+
+pub const ORACLE: &str = "examples/hashbench/evidence/oracle.jsonl";
+
+/// Design (the oracle's own key) -> measured score, None if the table overflowed.
+pub type Oracle = HashMap<String, Option<f64>>;
+
+pub fn load(path: &str) -> Result<Oracle> {
+    let mut oracle = Oracle::new();
+    for l in std::fs::read_to_string(path)?.lines() {
+        let v: Value = serde_json::from_str(l)?;
+        oracle.entry(v["design"].as_str().unwrap().to_string()).or_insert(v["score"].as_f64());
+    }
+    Ok(oracle)
+}
+
+/// The agent of examples/hashbench/.git-dream.toml; `salt` makes its proposals differ per replicate.
+pub fn agent(salt: &str) -> Result<SpaceAgent> {
+    let knobs = toml::from_str("W=[16,64]\nb=[1,2]\nL=[0,1,2,3,4,5,6,8]\nr=[0.25,0.375,0.5,0.625,0.75]\no=[0.005,0.01,0.02,0.03,0.05,0.08,0.12]")?;
+    let start = toml::from_str("W=16\nb=1\nL=0\nr=0.5\no=0.05")?;
+    SpaceAgent::new(&knobs, &start, salt, "params.json", 0.3, 0.2)
+}
+
+/// The agent's design key -> the oracle's (with no levels, b / r / o are inert).
+pub fn oracle_key(a: &SpaceAgent, design: &str) -> String {
+    let q = a.indices(design).unwrap();
+    let v: Vec<String> = (0..5).map(|i| a.values[i][q[i]].show()).collect();
+    if v[2] == "0" {
+        format!("W{}-b1-L0-r0.5-o0.05", v[0])
+    } else {
+        format!("W{}-b{}-L{}-r{}-o{}", v[0], v[1], v[2], v[3], v[4])
+    }
+}
+
+pub fn agent_key(a: &SpaceAgent, key: &str) -> String {
+    a.names.iter().zip(key.split('-')).map(|(n, p)| format!("{n}={}", &p[1..])).collect::<Vec<_>>().join(",")
+}
+
+/// One measurement of a true score `s` with relative noise `noise` (standard deviation).
+pub fn noisy(s: f64, noise: f64, rng: &mut Rng) -> f64 {
+    let u = rng.f64().max(1e-300);
+    let z = (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * rng.f64()).cos();
+    s * (1.0 + noise * z)
+}

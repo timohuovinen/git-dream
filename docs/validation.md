@@ -1,19 +1,19 @@
 # Validation protocol and current evidence
 
-The current prospective synthetic comparison does **not** establish an adaptive quality advantage. At equal evaluation budgets, guarded cache replay and guarded strict replay matched fixed refinement's final scores. Multi-start successive halving did better on all three included landscapes. The stopping variant used fewer calls on some landscapes without changing final quality in this sample.
+The original prospective synthetic comparison did **not** establish a quality advantage for replay-based adaptation. At equal evaluation budgets, guarded cache replay and guarded strict replay matched fixed refinement's final scores. A later section reports the yield-model `bandit` policy, which does better than fixed refinement on two of four landscapes. Multi-start successive halving did better on all three included landscapes. The stopping variant used fewer calls on some landscapes without changing final quality in this sample.
 
 This is an exploratory benchmark, not a preregistered experiment or a demonstration of generalization to real repositories. The tasks and controls were implemented before inspecting these results; no tasks or seeds were removed after seeing outcomes.
 
 ## Reproduce
 
-From the repository root (Rust, Python 3):
+From the repository root:
 
 ```sh
 cargo run --release --locked --example compare -- --seeds 100 --first-seed 10000 > results.jsonl
-python3 research/validation/summarize.py results.jsonl
+cargo run --release --locked --example summarize -- results.jsonl
 ```
 
-[Source](../examples/compare.rs), [source hashes and run provenance](../research/validation/provenance.json), [raw traces](../research/validation/results.jsonl), [all paired comparisons](../research/validation/summary.md).
+[Source](../benchmarks/compare.rs), [source hashes and run provenance](../benchmarks/evidence/compare/provenance.json), [raw traces](../benchmarks/evidence/compare/results.jsonl), [all paired comparisons](../benchmarks/evidence/compare/summary.md).
 
 ## What was compared
 
@@ -48,7 +48,91 @@ Mean final regret (score minus the enumerated optimum; lower is better):
 | Equal allocation over starts | 8.880 | 23.274 | 6.600 |
 | Successive halving over starts | 0.040 | 5.486 | 1.630 |
 
-The [full summary](../research/validation/summary.md) reports paired mean regret differences against refinement with percentile bootstrap intervals (5,000 seed resamples, fixed bootstrap seed). These are descriptive, unadjusted 95% intervals across proposal seeds on each fixed landscape, not uncertainty across unseen tasks. We do not pool unlike objective scales or select a winner by significance tests. Enumeration of the optimum is used only for reporting regret; no search method can access it.
+The [full summary](../benchmarks/evidence/compare/summary.md) reports paired mean regret differences against refinement with percentile bootstrap intervals (5,000 seed resamples, fixed bootstrap seed). These are descriptive, unadjusted 95% intervals across proposal seeds on each fixed landscape, not uncertainty across unseen tasks. We do not pool unlike objective scales or select a winner by significance tests. Enumeration of the optimum is used only for reporting regret; no search method can access it.
+
+## Yield-model bandit and extended rounds
+
+Added after the comparison above. The three `bandit` arms in `benchmarks/compare.rs` and the second harness `benchmarks/hashgrid.rs` test the default policy family and round extension (see the README's Policies section). The rows of the earlier methods are byte-identical to before.
+
+- `bandit`: four rounds of 24, the policy learns within each round only.
+- `bandit_dream`: the same, and the yield model is refitted over the arm's own recorded rounds before each round.
+- `bandit_extended`: one tree of all 96 proposals, which is what `[explore] extend` produces.
+
+The policy's fixed parameters (prior, `m = 4`, `focus = 16`, continuation classes) were chosen on seeds 50000–50999 of these two harnesses. The numbers below are from seeds 70000 onward, run once after the choice was frozen. The published test seeds 10000–10099 were not used at any point.
+
+```sh
+cargo run --release --locked --example compare -- --seeds 300 --first-seed 70000 > compare.jsonl
+cargo run --release --locked --example hashgrid -- --seeds 500 --first-seed 70000 > hashgrid.jsonl
+```
+
+Synthetic landscapes, mean final regret after 97 evaluations, 300 seeds. In brackets: paired difference against fixed refinement with a 95% interval.
+
+| Method | Smooth | Rugged | Deceptive |
+|---|---:|---:|---:|
+| Fixed refinement | 1.307 | 57.379 | 20.940 |
+| Guarded adaptive cache / strict | 1.307 | 57.379 | 20.940 |
+| `bandit` | 0.203 (−1.10 ± 1.73) | 21.825 (−35.55 ± 6.12) | 20.043 (−0.90 ± 0.58) |
+| `bandit_dream` | 0.380 (−0.93 ± 1.74) | 22.796 (−34.58 ± 6.27) | 20.057 (−0.88 ± 0.58) |
+| `bandit_extended` | 0.030 (−1.28 ± 1.72) | 12.325 (−45.05 ± 5.69) | 20.000 (−0.94 ± 0.58) |
+| Uniform random search | 3.510 | 11.101 | 3.510 |
+| Successive halving over starts | 0.093 | 5.695 | 1.477 |
+
+Measured hash-table grid ([oracle](../examples/hashbench/evidence/oracle.jsonl): 982 designs, about 4 in 10 fail), 320 evaluations with 6% measurement noise, 500 seeds. Mean gap between the true score of the final design and the best design on the grid, with a 95% interval:
+
+| Rounds × proposals | `refine_best` | `repair` | `bandit` | `bandit_dream` |
+|---|---:|---:|---:|---:|
+| 1 × 320 (extended) | 9.66% ± 1.55 | 46.82% ± 7.77 | 2.38% ± 0.27 | — |
+| 8 × 40 | 51.79% ± 5.97 | 50.44% ± 7.66 | 4.36% ± 0.99 | 4.85% ± 1.05 |
+| 40 × 8 | 161.73% ± 7.02 | 110.88% ± 8.54 | 128.02% ± 8.24 | 89.74% ± 8.17 |
+
+What this does and does not show:
+
+- At equal evaluations the bandit is clearly better than fixed refinement on the rugged landscape and on the measured grid, and not distinguishable from it on the smooth one.
+- It does not help on the deceptive landscape. The proposal operator moves one or two grid steps, and no policy that only chooses which attempt to continue can cross that distance. Successive halving and uniform random search use a different operator (random points) and remain far better on all three synthetic tasks.
+- Round length matters more than the policy. The same 320 evaluations end 2.4% from the optimum in one tree and 128% away in 40 rounds of 8, because a new round keeps only the promoted attempt. For a deterministic agent a new round also repeats the proposals already made from that attempt.
+- Refitting the model between rounds (`bandit_dream`) made no measurable difference with rounds of 24 or 40 proposals. It helped with rounds of 8 (128% → 90%), where a round is too short to learn anything by itself. Extending the round was far better than either.
+- Both harnesses use the deterministic space agent, and the parameters were chosen on the same two harnesses. Fresh seeds rule out overfitting to seeds, not to these landscapes. There is no evidence here about LLM agents or about unseen tasks.
+
+## Attempts at once
+
+`[explore] parallel` runs several attempts at once: the policy chooses each of them without the results of the others still in flight. `benchmarks/hashgrid.rs` measures what that costs with `sim::run_waves`, which is what a live round does when evaluations run alone: `N` attempts are chosen, then all `N` results arrive. A wave takes the time of one attempt, so the same evaluations take 1/N of the time.
+
+No parameter was chosen for this: the policy is the one frozen above, and the seeds are the same 500 (70000 onward). The first table is part of the `hashgrid` command above; the second adds `--total 40`.
+
+Measured hash-table grid, one round, 6% noise, 500 seeds: mean gap to the best design, 95% interval. The last column is `bandit` one attempt at a time for the same number of steps, which is the fair comparison at equal time.
+
+320 evaluations:
+
+| At once | Steps | `refine_best` | `bandit` | `bandit`, one at a time, same steps |
+|---:|---:|---:|---:|---:|
+| 1 | 320 | 9.66% ± 1.55 | 2.38% ± 0.27 | — |
+| 4 | 80 | 8.40% ± 1.38 | 2.46% ± 0.29 | 9.90% ± 1.19 |
+| 8 | 40 | 8.27% ± 1.51 | 2.51% ± 0.27 | 38.57% ± 4.14 |
+| 16 | 20 | 8.41% ± 1.50 | 2.71% ± 0.29 | 98.28% ± 6.17 |
+
+40 evaluations:
+
+| At once | Steps | `refine_best` | `bandit` | `bandit`, one at a time, same steps |
+|---:|---:|---:|---:|---:|
+| 1 | 40 | 104.34% ± 6.21 | 38.57% ± 4.14 | — |
+| 4 | 10 | 109.73% ± 6.08 | 42.89% ± 4.32 | 157.67% ± 6.16 |
+| 8 | 5 | 111.67% ± 6.11 | 42.44% ± 4.11 | 192.73% ± 6.04 |
+| 16 | 3 | 105.87% ± 6.11 | 53.28% ± 4.61 | 231.88% ± 4.98 |
+
+Wall-clock time of the real binary on the toy repositories, one run each (a check that attempts really overlap, not a benchmark):
+
+| Setup | One at a time | At once |
+|---|---:|---:|
+| `toy-space`, 24 attempts, evaluator sleeps 0.5 s, `evaluations = "parallel"` | 13.4 s | 3.9 s (4), 2.4 s (8) |
+| `toy-command`, 12 attempts, agent sleeps 1 s, evaluator 0.1 s, `evaluations = "alone"` | 14.1 s | 4.8 s (4) |
+
+What this does and does not show:
+
+- With a few hundred evaluations, choosing up to 16 attempts blind cost at most 0.3 points of gap, inside or near the interval, for a 16-fold cut in steps. At equal time, attempts at once were far ahead in every row.
+- With 40 evaluations the cost is visible: 16 at once leaves three waves, and the gap grows from 39% to 53%. Four or eight at once cost about 4 points.
+- The simulated agent's k-th proposal from an attempt always differs from its earlier ones. LLM agents started together from one attempt may make the same change; they are told how many others started beside them, and whether that prevents duplicates is not measured.
+- Only waves are simulated. With `evaluations = "serial"` or `"parallel"` a lane is refilled as soon as it is free; that path is covered by end-to-end tests (overlap, isolation, extension, recovery after a kill), not by a quality benchmark.
+- Evaluation time is assumed equal for every attempt and the agent's time is the only thing saved when evaluations run alone: if evaluation dominates an attempt, `evaluations = "alone"` saves little.
 
 ## What held-out replay does and does not address
 

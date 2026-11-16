@@ -1,12 +1,12 @@
 [agent]
 kind = "command"
-command = "python3 agent.py"
+command = "sh agent.sh"
 prompt = "Speed up log aggregation while preserving the evaluator's correctness contract."
 
 [evaluate]
-command = "python3 eval.py"
+command = "sh eval.sh"
 goal = "min"
-protected = ["eval.py", "tests.rs", "bench.rs", "agent.py", "candidates"]
+protected = ["eval.sh", "tests.rs", "bench.rs", "agent.sh", "candidates"]
 confirm_top = 2
 confirm_reps = 3
 remeasure_root = true

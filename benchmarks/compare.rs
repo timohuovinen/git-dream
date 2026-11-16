@@ -95,6 +95,7 @@ fn select(
             normalize_root: false,
             registry: reg,
             families: &fams,
+            threads: 1, // the harness is timed by meta/eval-speed.sh: keep it on one core
         },
     )?;
     let candidate = &ranking[0].0;
@@ -138,6 +139,45 @@ fn search(
             &mut world,
             &root,
             BUDGET,
+            "prospective",
+            round,
+            Goal::Min,
+            round as u64,
+            &mut |_, _| {},
+        )?;
+        trace.extend(t.best_trace.iter().skip(1).map(|s| s.unwrap()));
+        root = t.best().unwrap().clone();
+        hist.push(t);
+    }
+    Ok(trace)
+}
+
+// The yield-model arms: a `bandit` policy learns which kind of move pays from
+// measured outcomes. `dream` refits its model over this arm's own recorded
+// rounds before each round; without it only the round in progress informs the
+// policy. One round of the whole budget is what `[explore] extend` produces:
+// no attempt is dropped at a round boundary.
+fn bandit(
+    reg: &Registry,
+    a: &SpaceAgent,
+    task: &str,
+    dream: bool,
+    rounds: u32,
+) -> Result<Vec<f64>> {
+    let mut world = Surface { agent: a, task };
+    let mut root = world.node(a.root());
+    let mut trace = vec![root.score.unwrap()];
+    let mut hist: Vec<Tree> = vec![];
+    let mut p = reg.make(&json!({"family": "bandit"}))?;
+    for round in 1..=rounds {
+        if dream {
+            p = git_dream::model::learn(&p, &hist).unwrap().0;
+        }
+        let t = sim::run_tree(
+            &mut p,
+            &mut world,
+            &root,
+            (TOTAL - 1) / rounds as usize,
             "prospective",
             round,
             Goal::Min,
@@ -275,6 +315,9 @@ fn main() -> Result<()> {
             rows.push(("uniform_random", uniform));
             rows.push(("successive_halving", allocation(&a, task, seed, true)));
             rows.push(("equal_allocation", allocation(&a, task, seed, false)));
+            rows.push(("bandit", bandit(&reg, &a, task, false, ROUNDS)?));
+            rows.push(("bandit_dream", bandit(&reg, &a, task, true, ROUNDS)?));
+            rows.push(("bandit_extended", bandit(&reg, &a, task, false, 1)?));
             for (name, trace) in rows {
                 anyhow::ensure!(
                     name == "adaptive_stopping" || trace.len() == TOTAL,

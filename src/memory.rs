@@ -20,6 +20,7 @@
 //! every tree.
 
 use crate::tree::{Goal, Node, Tree, NOOP, OK};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -114,7 +115,9 @@ impl Memory {
     /// Tree of commit/tree `base` (None = empty) with `files` (path, text) added or replaced.
     pub fn tree_with_files(&self, base: Option<&str>, files: &[(String, String)]) -> Result<String> {
         std::fs::create_dir_all(&self.state)?;
-        let idx = self.state.join(format!("index-{}", std::process::id()));
+        // unique per call: attempts are built on several threads at once
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let idx = self.state.join(format!("index-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let env = vec![("GIT_INDEX_FILE".to_string(), idx.to_string_lossy().into_owned())];
         let r = (|| {
             match base {
@@ -236,6 +239,11 @@ impl Memory {
             ("Status", n.status.clone()),
             ("Score", fmt_score(n.score)),
         ];
+        // Only when the result arrived after later attempts had been chosen
+        // (attempts running at once): which choices were made without it.
+        if n.seen > n.id + 1 {
+            trailers.push(("Seen", n.seen.to_string()));
+        }
         // How the evaluation failed (measured, not a diagnosis: the evidence is in the note).
         if n.status != OK && n.status != NOOP {
             if let Some(f) = note.and_then(crate::agents::failure) {
@@ -292,8 +300,12 @@ impl Memory {
                 change,
             );
             n.sha = sha.trim().to_string();
+            n.seen = num("Seen")?.unwrap_or(0);
+            // an extended round records a larger budget on its later attempts: keep the newest
+            if nodes.iter().all(|m: &Node| m.id < n.id) {
+                meta = tr;
+            }
             nodes.push(n);
-            meta = tr;
         }
         nodes.sort_by_key(|n| n.id);
         if nodes.iter().enumerate().any(|(i, n)| n.id != i) {
@@ -353,8 +365,9 @@ impl Memory {
     // ---- scratch worktree ----------------------------------------------------------------
     /// A private worktree (inside .git/dream/) where attempts are materialised,
     /// built and evaluated. Ignored build outputs survive between attempts.
-    pub fn worktree(&self, run: &str) -> Result<PathBuf> {
-        let path = self.state.join("wt").join(run);
+    /// Attempts running at once each use their own (`lane` 0, 1, ...).
+    pub fn worktree(&self, run: &str, lane: usize) -> Result<PathBuf> {
+        let path = self.worktree_path(run, lane);
         let listed = self.git(&["worktree", "list", "--porcelain"])?;
         let want = format!("worktree {}", path.display());
         if !listed.lines().any(|l| l == want) {
@@ -367,6 +380,11 @@ impl Memory {
             self.git(&["worktree", "add", "-q", "--detach", &path.to_string_lossy(), &base])?;
         }
         Ok(path)
+    }
+
+    /// `wt/<run>` for lane 0, `wt/<run>@<lane>` for the others ('@' cannot occur in a run name).
+    fn worktree_path(&self, run: &str, lane: usize) -> PathBuf {
+        self.state.join("wt").join(if lane == 0 { run.to_string() } else { format!("{run}@{lane}") })
     }
 
     /// Make worktree `wt` (index + files) exactly `tree`; keep ignored files.
@@ -407,10 +425,14 @@ impl Memory {
             let input: String = refs.iter().map(|r| format!("delete {r}\n")).collect();
             self.git_in(&["update-ref", "--stdin"], &input)?;
         }
-        let path = self.state.join("wt").join(run);
-        if path.exists() {
+        let mut paths = vec![self.worktree_path(run, 0)];
+        if let Ok(dir) = std::fs::read_dir(self.state.join("wt")) {
+            let lanes = format!("{run}@");
+            paths.extend(dir.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&lanes)).map(|e| e.path()));
+        }
+        for path in paths.iter().filter(|p| p.exists()) {
             let _ = self.git(&["worktree", "remove", "--force", &path.to_string_lossy()]);
-            let _ = std::fs::remove_dir_all(&path);
+            let _ = std::fs::remove_dir_all(path);
         }
         self.git(&["worktree", "prune"])?;
         Ok(refs.len())

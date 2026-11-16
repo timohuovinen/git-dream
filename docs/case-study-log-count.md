@@ -6,7 +6,7 @@ The command adapter installs a supplied optimization candidate. It does not call
 
 ## Evidence
 
-[Full Git bundle](../research/log-count/history.bundle), [run log](../research/log-count/run.log), [toolchain versions](../research/log-count/environment.txt), [refs](../research/log-count/refs.txt), [fixture and adapter](../examples/log-count).
+[Full Git bundle](../examples/log-count/evidence/history.bundle), [run log](../examples/log-count/evidence/run.log), [toolchain versions](../examples/log-count/evidence/environment.txt), [refs](../examples/log-count/evidence/refs.txt), [fixture and adapter](../examples/log-count).
 
 One fixed-policy round recorded:
 
@@ -27,7 +27,7 @@ Use a fresh directory; fetch explicitly because ordinary clones omit hidden refs
 
 ```sh
 git init /tmp/log-count-evidence
-git -C /tmp/log-count-evidence fetch /absolute/path/to/git-dream/research/log-count/history.bundle \
+git -C /tmp/log-count-evidence fetch /absolute/path/to/git-dream/examples/log-count/evidence/history.bundle \
   'refs/heads/*:refs/heads/*' 'refs/dream/*:refs/dream/*' \
   'refs/tags/*:refs/tags/*' 'refs/notes/*:refs/notes/*'
 git -C /tmp/log-count-evidence log --all --graph --oneline
@@ -40,7 +40,7 @@ git -C /tmp/log-count-evidence notes --ref=dream show dream/main/best
 
 ```sh
 cargo build --locked
-python3 research/log-count/run.py --output /tmp/log-count-new-results
+sh examples/log-count/evidence/run.sh --output /tmp/log-count-new-results
 ```
 
-The runner creates a temporary repository, records all attempts and confirmations, and exports a new bundle and logs. It requires Rust, Git, and Python 3. To perform a new autonomous agent experiment, replace `[agent] command` with the actual agent invocation, retain the independent evaluator and protected paths, record model/version/token costs, and collect fixed-policy controls. The existing candidate-replay run must not be relabeled as that experiment.
+The runner creates a temporary repository, records all attempts and confirmations, and exports a new bundle and logs. It requires Rust, Git and a POSIX shell. The bundled history was recorded when the adapter and evaluator were Python scripts (`agent.py`, `eval.py`); the shell versions in the example do the same steps. To perform a new autonomous agent experiment, replace `[agent] command` with the actual agent invocation, retain the independent evaluator and protected paths, record model/version/token costs, and collect fixed-policy controls. The existing candidate-replay run must not be relabeled as that experiment.

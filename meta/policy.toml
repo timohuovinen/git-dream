@@ -8,7 +8,7 @@ command = 'opencode run --auto --archived --title "dream $DREAM_RUN" ${OPENCODE_
 prompt = """
 Track: POLICY. Read AGENTS.md first, then follow its "Policy track" section.
 Goal: lower the mean final regret of the guarded adaptive arms (adaptive_cache,
-adaptive_strict) in examples/compare.rs at the same 97-evaluation budget.
+adaptive_strict) in benchmarks/compare.rs at the same 97-evaluation budget.
 Make ONE focused, well-motivated change. Run `sh meta/eval-policy.sh` yourself
 before finishing if time allows, and report its numbers in your write-up.
 """
@@ -18,7 +18,7 @@ timeout = 21600          # 6 h: local model is ~8x slower than hosted; tune to y
 command = "sh meta/eval-policy.sh"
 goal = "min"
 timeout = 3600
-protected = ["meta", "examples/compare.rs", "tests", "research", "docs/validation.md", "Cargo.lock"]
+protected = ["meta", "benchmarks/compare.rs", "benchmarks/score.rs", "tests", "examples/hashbench/evidence", "examples/log-count/evidence", "benchmarks/evidence", "docs/validation.md", "Cargo.lock"]
 
 [explore]
 budget = 4

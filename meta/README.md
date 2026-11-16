@@ -6,7 +6,7 @@ Every attempt, failed ones included, ends up in git.
 
 | track  | config               | evaluator              | what "better" means |
 |--------|----------------------|------------------------|---------------------|
-| policy | `meta/policy.toml`   | `meta/eval-policy.sh`  | lower regret of the adaptive arms in `examples/compare.rs` at an equal budget |
+| policy | `meta/policy.toml`   | `meta/eval-policy.sh`  | lower regret of the adaptive arms in `benchmarks/compare.rs` at an equal budget |
 | speed  | `meta/speed.toml`    | `meta/eval-speed.sh`   | same output, byte-identical, in less wall time |
 | scale  | not yet: see `AGENTS.md` | | bootstrap interactively first |
 
@@ -17,7 +17,7 @@ The agent's instructions live in `AGENTS.md`, which opencode reads automatically
 The loop, builds and evaluations run locally. Only the model runs elsewhere: opencode's configured
 provider (e.g. an OpenAI-compatible `baseURL` on another machine) does the thinking.
 
-Needs Rust (stable), git ≥ 2.31, python3, `gh`, and opencode with `--auto` working against your local model.
+Needs Rust (stable), git ≥ 2.31, `gh`, and opencode with `--auto` working against your local model.
 The clone is only needed because git-dream's own source is what gets improved. The harness itself is the
 release binary. To *use* git-dream on other projects, no clone is needed at all:
 
@@ -65,9 +65,9 @@ Tuning knobs:
 2. **Final check on held-out seeds that the search never saw**:
    ```sh
    cargo run --release --locked --example compare -- --seeds 100 --first-seed 10000 > final.jsonl
-   python3 research/validation/summarize.py final.jsonl
+   cargo run --release --locked --example summarize -- final.jsonl
    ```
-   Compare that against `research/validation/summary.md`. Training-seed gains that disappear here
+   Compare that against `benchmarks/evidence/compare/summary.md`. Training-seed gains that disappear here
    are overfitting. Better still, also try a landscape the agent has never seen.
 3. Cherry-pick into a branch, then rerun `meta/setup.sh` so the speed reference follows the new behaviour.
 
