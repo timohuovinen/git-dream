@@ -17,6 +17,21 @@ struct Repo(PathBuf);
 impl Drop for Repo {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(self.worktrees());
+    }
+}
+
+impl Repo {
+    /// Scratch worktrees of this repository, next to it instead of in the user's cache.
+    fn worktrees(&self) -> PathBuf {
+        self.0.with_extension("wt")
+    }
+
+    /// The binary, run in this repository.
+    fn bin(&self) -> Command {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_git-dream"));
+        c.current_dir(&self.0).env("GIT_DREAM_WORKTREES", self.worktrees().join("cli"));
+        c
     }
 }
 
@@ -51,6 +66,8 @@ fn repo(example: &str, name: &str, edit: impl Fn(String) -> String) -> Repo {
 
 fn open(r: &Repo, run: Option<&str>) -> Engine {
     let mut e = Engine::open(&r.0, None, run).unwrap();
+    assert!(!e.mem.worktrees.components().any(|c| c.as_os_str() == ".git"), "agents cannot edit files under .git");
+    e.mem.worktrees = r.worktrees().join("api");
     e.quiet = true;
     e
 }
@@ -134,7 +151,7 @@ fn agent_sees_whole_history() {
     let r = repo("toy-command", "history", |s| s.replace("budget = 12", "budget = 4").replace("command = \"./agent.sh\"", agent).replace("command = \"./bench.sh\"", eval));
     let e = open(&r, None);
     let trees = e.rounds(2, false, None, None, None).unwrap();
-    let ctx = std::fs::read_to_string(r.0.join(".git/dream/wt/history.md")).unwrap();
+    let ctx = std::fs::read_to_string(e.mem.worktrees.join("history.md")).unwrap();
     for want in ["## Round 1", "## Round 2", "> Second line.", "fail (exit 3)", "solver.awk:3: syntax error", "**you are continuing this attempt**"] {
         assert!(ctx.contains(want), "history lacks {want:?}:\n{ctx}");
     }
@@ -161,7 +178,7 @@ fn history_all_pools_runs() {
     open(&r, Some("a")).rounds(1, false, None, None, None).unwrap();
     // default: runs don't see each other
     open(&r, Some("b")).rounds(1, false, None, None, None).unwrap();
-    let wt = r.0.join(".git/dream/wt");
+    let wt = r.worktrees().join("api");
     let b = std::fs::read_to_string(wt.join("history-b.md")).unwrap();
     assert!(!b.contains("only-in-run-a") && b.contains("## Round 1"), "{b}");
     // history = "all": run b reads run a's attempts, labelled by run, before its own
@@ -221,9 +238,8 @@ done
     assert!(git(&r.0, &["show", "dream/main/policy:first_k.sh"]).contains("calls"));
 
     // the binary: status / show / replay / policies / init
-    let bin = env!("CARGO_BIN_EXE_git-dream");
     let run = |args: &[&str]| {
-        let o = Command::new(bin).args(args).current_dir(&r.0).output().unwrap();
+        let o = r.bin().args(args).output().unwrap();
         assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
         String::from_utf8_lossy(&o.stdout).into_owned()
     };
@@ -265,7 +281,7 @@ fn exploration_floor_replays_exactly_and_gate_waits_for_history() {
     assert!(trees.iter().all(|t| t.calls() == 3));
     check_exact_replay(&e);
     assert_eq!(e.mem.policy_doc("main", Some(2)).unwrap()["accepted"], false);
-    let o = Command::new(env!("CARGO_BIN_EXE_git-dream")).args(["replay", "--holdout", "1"]).current_dir(&r.0).output().unwrap();
+    let o = r.bin().args(["replay", "--holdout", "1"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stdout).contains("held-out:"));
 }
@@ -417,6 +433,24 @@ fn run_killed_mid_round_resumes_from_recorded_attempts() {
 /// The default policy learns from measured outcomes; a round can be extended
 /// (or finished after a kill) and is then identical to one that never stopped;
 /// a new round starts from the yield model fitted over recorded history.
+/// The trailers are the last paragraph git-dream writes, read with git's own
+/// trailer parser: lines that look like them in the agent's write-up are text.
+#[test]
+fn trailer_lines_in_the_write_up_are_text() {
+    let agent = r#"command = './agent.sh && printf "\nAs in the history:\nDream-Seen: 99\nDream-Status: fail\nDream-Score: 0.001\n---\nDream-Node: 7\n\nSigned-off-by: an agent <a@b>\n" >> "$DREAM_MESSAGE_FILE"'"#;
+    let r = repo("toy-command", "trailers", |s| s.replace("budget = 12", "budget = 4").replace("command = \"./agent.sh\"", agent));
+    let e = open(&r, None);
+    let t = e.explore(Some(1), None).unwrap();
+    let lt = e.mem.load_tree("main", 1).unwrap().unwrap();
+    assert_eq!(sig(&lt), sig(&t));
+    assert!(lt.nodes.iter().all(|n| n.seen == 0), "a write-up set Dream-Seen");
+    assert_eq!(lt.nodes.iter().map(|n| &n.change).collect::<Vec<_>>(), t.nodes.iter().map(|n| &n.change).collect::<Vec<_>>());
+    assert!(lt.nodes[1..].iter().any(|n| n.change.contains("Dream-Seen: 99") && n.change.ends_with("Signed-off-by: an agent <a@b>")));
+    // the round is still the one its policy recorded: it extends
+    assert_eq!(e.extend(Some(2)).unwrap().calls(), 6);
+    check_exact_replay(&e);
+}
+
 #[test]
 fn bandit_extends_rounds_and_dreams_a_yield_model() {
     let r = repo("toy-space", "bandit", |s| s.replace("budget = 25", "budget = 6"));
@@ -452,9 +486,8 @@ fn bandit_extends_rounds_and_dreams_a_yield_model() {
     check_exact_replay(&e);
 
     // the binary: extend by flag, and show the model without deploying it
-    let bin = env!("CARGO_BIN_EXE_git-dream");
     let run = |args: &[&str]| {
-        let o = Command::new(bin).args(args).current_dir(&r.0).output().unwrap();
+        let o = r.bin().args(args).output().unwrap();
         assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
         String::from_utf8_lossy(&o.stdout).into_owned()
     };
@@ -563,7 +596,7 @@ fn killed_parallel_round_reruns_unfinished_attempts() {
     let cfg = cfg.replace("command = \"./bench.sh\"", "command = \"sleep 0.5; ./bench.sh\"").replace("budget = 25", "budget = 12\nparallel = 4\nevaluations = \"parallel\"");
     std::fs::write(r.0.join(".git-dream.toml"), cfg).unwrap();
     git(&r.0, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "config"]);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_git-dream")).args(["explore"]).current_dir(&r.0).stdout(std::process::Stdio::null()).spawn().unwrap();
+    let mut child = r.bin().args(["explore"]).stdout(std::process::Stdio::null()).spawn().unwrap();
     let started = std::time::Instant::now();
     while Command::new("git").args(["rev-parse", "-q", "--verify", "refs/dream/main/r01/n006"]).current_dir(&r.0).output().unwrap().stdout.is_empty() {
         assert!(started.elapsed().as_secs() < 60 && child.try_wait().unwrap().is_none(), "the round never got to its sixth attempt");
@@ -577,7 +610,7 @@ fn killed_parallel_round_reruns_unfinished_attempts() {
     let unfinished = rec.nodes.iter().filter(|n| n.status == PENDING).count();
     assert!(rec.calls() >= 6 && (1..=4).contains(&unfinished), "{} started, {unfinished} unfinished", rec.calls());
     // history with unfinished attempts can be shown and learnt from
-    let show = Command::new(env!("CARGO_BIN_EXE_git-dream")).args(["show"]).current_dir(&r.0).output().unwrap();
+    let show = r.bin().args(["show"]).output().unwrap();
     assert!(show.status.success() && String::from_utf8_lossy(&show.stdout).contains("pending"));
     e.dream(None, None, None, None, false).unwrap();
     let t = e.extend(Some(2)).unwrap();

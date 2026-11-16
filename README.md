@@ -197,7 +197,7 @@ repack = true      # default
 gc_every = 10      # default; 0 = never
 ```
 
-The trees are rebuilt from commit trailers before every dream, so the repository *is* the state. `.git/dream/` only holds scratch worktrees and can be deleted at any time. Hidden refs aren't pushed by default; `git dream push [remote]` / `git dream fetch [remote]` share runs.
+The trees are rebuilt from commit trailers before every dream, so the repository *is* the state. The scratch worktrees are outside the repository, in `~/.cache/git-dream/<repository>/` (or under `$GIT_DREAM_WORKTREES`, `$XDG_CACHE_HOME`, `%LOCALAPPDATA%`), and can be deleted at any time; `.git/dream/` holds only temporary files. They are not under `.git` because coding agents refuse to edit files there: Claude Code treats every path below `.git` as a sensitive file, so an agent placed in `.git/dream/wt` could read the code and not change it. Hidden refs aren't pushed by default; `git dream push [remote]` / `git dream fetch [remote]` share runs.
 
 ## Commands
 
@@ -287,8 +287,10 @@ A good prompt for the meta-agent: *"Read `git dream status`, `git dream show` fo
 
 ## Does it work?
 
-- **[Yield-model bandit](docs/validation.md#yield-model-bandit-and-extended-rounds):** on seeds never used in development, at equal evaluations. Synthetic rugged landscape: mean regret 57.4 with `refine_best`, 21.8 with `bandit`, 12.3 when the round is extended instead of restarted. Measured hash-table grid (982 designs, 4 in 10 fail, 6% noise): gap to the best design 51.8% → 4.4%, and 2.4% extended. No gain on the deceptive landscape, where successive halving with random restarts stays far ahead. Refitting the model between rounds only helped when rounds were very short. Deterministic agents only: no LLM-agent evidence yet.
-- **[Attempts at once](docs/validation.md#attempts-at-once):** on the same measured grid, 320 evaluations run 16 at a time (20 waves instead of 320 steps) ended 2.7% from the best design, against 2.4% one at a time. The same 20 steps spent one attempt at a time ended 98% away. With only 40 evaluations the cost of choosing blind is larger (39% → 53% at 16 at once). Simulated with a deterministic agent; on a real toy repository the wall-clock time for 24 attempts fell from 13.4 s to 2.4 s with 8 at once.
+- **[Yield-model bandit](docs/validation.md#yield-model-bandit-and-extended-rounds):** on seeds never used in development, at equal evaluations. Synthetic rugged landscape: mean regret 57.4 with `refine_best`, 21.8 with `bandit`, 12.3 when the round is extended instead of restarted. Measured hash-table grid (982 designs, 4 in 10 fail, 6% noise): gap to the best design 16.0% → 4.0% in 8 rounds of 40, and 6.1% → 2.2% in one extended round, where the hand-written `repair` policy does as well (2.3%). No gain on the deceptive landscape, where successive halving with random restarts stays far ahead. Refitting the model between rounds only helped when rounds were very short. Deterministic agents only; for an LLM agent see the next point.
+- **[A real coding agent](docs/validation.md#a-real-coding-agent):** Claude Haiku 5.5 improving a Rust compressor, 4 strategies × 4 runs × 48 attempts. No strategy was distinguishable from another: `bandit` ended 37 ± 1,476 bytes from fixed refinement on a score near 33,500. The agent did most of the work in its first attempt. A wide record (the paper's independent chains) kept 15% of candidate policies inside the record against 1 to 4% for a narrow one, but in 13 of 16 runs the replay winner was a policy that spends less, and deploying it did not help. Every attempt is in the bundled repositories.
+- **[Attempts at once](docs/validation.md#attempts-at-once):** on the same measured grid, 320 evaluations run 16 at a time (20 waves instead of 320 steps) ended 2.6% from the best design, against 2.2% one at a time. The same 20 steps spent one attempt at a time ended 52% away. With only 40 evaluations the cost of choosing blind is larger (22% → 33% at 16 at once). Simulated with a deterministic agent; on a real toy repository the wall-clock time for 24 attempts fell from 13.4 s to 2.4 s with 8 at once.
+- **[Replay selection](docs/validation.md#can-replay-choose-a-better-policy):** on 100 independent histories for each of five ways of recording them, the policy that scored best on replay was never reliably better than `refine_best` once deployed: no better in 23 of 30 settings, worse in 7. Cache replay found policies that were better on the recorded rounds, and the gain did not carry over. This is why replay is no longer the default.
 - **[Prospective synthetic comparison](docs/validation.md):** 100 fresh seeds on each of three landscapes, ten methods, 97 objective evaluations per fixed-budget method. Guarded adaptive search matched fixed refinement's final quality; it did not demonstrate a quality advantage. Multi-start successive halving performed better on these tasks. A separate stopping arm saved calls on some tasks. All traces and paired intervals are included.
 - **[Inspectable coding example](docs/case-study-log-count.md):** a supplied Rust optimization changed linear key lookup to hash aggregation. Fresh confirmation means were 25.16 ms before and 1.16 ms after on the included fixture. A deliberate incorrect control failed. The full Git history, notes and policy are bundled. The adapter replays supplied candidates; this is not an autonomous LLM search or evidence for adaptive policy superiority.
 
@@ -303,7 +305,7 @@ Earlier evidence (different prototype/configurations, not rerun under the new ga
 - **Short rounds discard the search.** A new round keeps only the promoted attempt. Prefer `extend = true`; start a new round when scores from earlier attempts stop being comparable (machine drift, changed evaluator inputs).
 - **Replay knows only what was recorded.** It can't predict untried changes. With a stochastic agent (an LLM), only recorded decisions replay (`strict`), and the case study found strict dreaming can do harm. Use prospective evaluation before relying on an adapted policy; held-out replay does not correct behavior-policy selection or missing support.
 - **Early stopping can lock in.** Once rounds stop improving, the cheapest policy on replay is one that stops early. It then records too little new history to escape a local optimum. This showed up in the toy runs. Use `min_calls`, full-budget control runs, and independent data collection. Continuing an already adapted run with `--no-dream` freezes its current policy; a fresh named run is needed for an initial-policy baseline.
-- **Replay is a filter, not an oracle.** Its policy ranking correlated weakly with true performance in the case study.
+- **Replay is not an oracle, and here not a filter either.** Its ranking of policies correlated weakly with their true performance (Spearman 0.03 to 0.37), and its pick was not better than the deployed policy ([numbers](docs/validation.md#can-replay-choose-a-better-policy)).
 - **Attempts at once trade information for time.** Each choice is made without the results still in flight. With `evaluations = "alone"` and a deterministic agent the round is still reproducible; otherwise which results a choice knew depends on timing (it is recorded, so the round can be extended, but a second run may differ). Replay scores rounds one attempt at a time, so it does not reproduce a round recorded with several at once. Identical designs proposed at the same time are each measured, even with `reuse = true`. Nothing here has been measured with LLM agents.
 - **Reproducibility has boundaries.** Git preserves source and recorded outcomes, not the machine, toolchain, dependencies, model service, or random output of an external agent. Pin these separately. Ignored build caches can affect timing.
 - **External policies:** invalid replies and process failures abort replay instead of earning a stopping reward. Each request/reply has a configurable deadline (default 10 seconds); timeouts kill the policy process group and abort the operation.
@@ -318,13 +320,15 @@ src/                the tool: memory.rs (git layout), engine.rs (config, rounds,
                     par.rs (jobs at once), rng.rs, main.rs (CLI)
 tests/e2e.rs        end-to-end tests on the examples in throwaway repositories (cargo test)
 examples/           projects to run `git dream` on, one folder each: toy-space (parameter search), toy-command
-                    (code-editing agent), log-count (a Rust optimization), hashbench (config, evaluator source and
-                    patch for the hash-table crate). `<project>/evidence/` holds what a recorded run of it produced
+                    (code-editing agent), log-count (a Rust optimization), codec (a Rust compressor improved by an
+                    LLM agent), hashbench (config, evaluator source and patch for the hash-table crate). `<project>/evidence/` holds what a recorded run of it produced
 benchmarks/         programs that measure the tool itself: compare.rs, hashgrid.rs and fidelity.rs (prospective
-                    comparisons), summarize.rs and score.rs (reports). Run as `cargo run --release --example <name>`.
-                    benchmarks/evidence/<benchmark>/ holds a benchmark's recorded output (compare: the traces
-                    behind docs/validation.md)
-policies/           patient.rs: a sample external policy, written as a standalone program
+                    comparisons), summarize.rs and score.rs (reports), runs.rs (compares runs recorded with a real
+                    agent). Run as `cargo run --release --example <name>`.
+                    benchmarks/evidence/<benchmark>/ holds a benchmark's recorded output (the numbers in
+                    docs/validation.md)
+policies/           external policies, written as standalone programs: patient.rs (a sample), chains.rs (the
+                    paper's fixed strategy: independent chains from the root)
 docs/               case studies, validation protocol and limitations
 meta/               git-dream applied to its own source (configs and evaluators for self-improvement runs)
 skills/             the git-dream agent skill

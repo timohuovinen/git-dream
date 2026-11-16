@@ -34,8 +34,10 @@ pub struct Memory {
     pub cwd: PathBuf,
     pub top: PathBuf,
     pub common: PathBuf,
-    /// `.git/dream/`: scratch worktrees and temporary files.
+    /// `.git/dream/`: temporary files.
     pub state: PathBuf,
+    /// This repository's scratch worktrees (see [`worktree_root`]).
+    pub worktrees: PathBuf,
     env: Vec<(String, String)>,
 }
 
@@ -45,6 +47,23 @@ pub fn check_run(run: &str) -> Result<()> {
         bail!("bad run name {run:?} (letters, digits, . _ -)");
     }
     Ok(())
+}
+
+/// Where a repository's scratch worktrees live: `$GIT_DREAM_WORKTREES/<repo>`,
+/// else `<user cache directory>/git-dream/<repo>`. Never under `.git`: coding
+/// agents refuse to edit files there (Claude Code calls them sensitive files),
+/// so an agent working in `.git/dream/wt` cannot change the code. `<repo>` is
+/// the directory's name plus a hash of its path. Without a home directory the
+/// old place, `.git/dream/wt`, is all that is left.
+fn worktree_root(common: &Path) -> PathBuf {
+    let dir = |var: &str| std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let name = common.parent().and_then(Path::file_name).map_or("repo".into(), |n| n.to_string_lossy().into_owned());
+    let key = format!("{name}-{:016x}", crate::rng::hash(&common.to_string_lossy()));
+    let base = dir("GIT_DREAM_WORKTREES")
+        .or_else(|| dir("XDG_CACHE_HOME").map(|d| d.join("git-dream")))
+        .or_else(|| dir("LOCALAPPDATA").map(|d| d.join("git-dream")))
+        .or_else(|| dir("HOME").map(|d| d.join(".cache").join("git-dream")));
+    base.map_or_else(|| common.join("dream").join("wt"), |b| b.join(key))
 }
 
 fn fmt_score(s: Option<f64>) -> String {
@@ -57,10 +76,11 @@ fn fmt_score(s: Option<f64>) -> String {
 
 impl Memory {
     pub fn open(cwd: &Path) -> Result<Memory> {
-        let mut m = Memory { cwd: cwd.into(), top: PathBuf::new(), common: PathBuf::new(), state: PathBuf::new(), env: vec![("GIT_TERMINAL_PROMPT".into(), "0".into())] };
+        let mut m = Memory { cwd: cwd.into(), top: PathBuf::new(), common: PathBuf::new(), state: PathBuf::new(), worktrees: PathBuf::new(), env: vec![("GIT_TERMINAL_PROMPT".into(), "0".into())] };
         m.top = PathBuf::from(m.git(&["rev-parse", "--show-toplevel"]).context("not inside a git repository")?);
         m.common = PathBuf::from(m.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
         m.state = m.common.join("dream");
+        m.worktrees = worktree_root(&m.common);
         if m.run(&["var", "GIT_COMMITTER_IDENT"], None, None, &[]).is_err() {
             for k in ["AUTHOR", "COMMITTER"] {
                 m.env.push((format!("GIT_{k}_NAME"), "git-dream".into()));
@@ -267,7 +287,10 @@ impl Memory {
         if shas.is_empty() {
             return Ok(None);
         }
-        let log = self.git_in(&["log", "--no-walk=unsorted", "--stdin", "--format=%H%x1f%B%x1e"], &(shas.join("\n") + "\n"))?;
+        // The outcome is read with git's own trailer parser: only the last
+        // paragraph of a message is its trailers, so a line of an agent's
+        // write-up that looks like one stays text.
+        let log = self.git_in(&["log", "--no-walk=unsorted", "--stdin", "--format=%H%x1f%(trailers:only,unfold)%x1f%B%x1e"], &(shas.join("\n") + "\n"))?;
         let mut nodes = vec![];
         let mut meta: HashMap<String, String> = HashMap::new();
         for rec in log.split('\x1e') {
@@ -275,8 +298,10 @@ impl Memory {
             if rec.is_empty() {
                 continue;
             }
-            let (sha, body) = rec.split_once('\x1f').ok_or_else(|| anyhow!("bad log record"))?;
-            let tr: HashMap<String, String> = body.lines().filter_map(|l| l.strip_prefix("Dream-")?.split_once(':')).map(|(k, v)| (k.to_string(), v.trim().to_string())).collect();
+            let mut fields = rec.splitn(3, '\x1f');
+            let (Some(sha), Some(trailers), Some(body)) = (fields.next(), fields.next(), fields.next()) else { bail!("bad log record") };
+            let body = body.trim();
+            let tr: HashMap<String, String> = trailers.lines().filter_map(|l| l.strip_prefix("Dream-")?.split_once(':')).map(|(k, v)| (k.to_string(), v.trim().to_string())).collect();
             let get = |k: &str| tr.get(k).cloned().ok_or_else(|| anyhow!("commit {sha} lacks Dream-{k}"));
             let subject = body.lines().next().unwrap_or("");
             // A multi-line change sits between the design/result paragraph and the trailers.
@@ -363,7 +388,7 @@ impl Memory {
     }
 
     // ---- scratch worktree ----------------------------------------------------------------
-    /// A private worktree (inside .git/dream/) where attempts are materialised,
+    /// A private worktree (outside the repository) where attempts are materialised,
     /// built and evaluated. Ignored build outputs survive between attempts.
     /// Attempts running at once each use their own (`lane` 0, 1, ...).
     pub fn worktree(&self, run: &str, lane: usize) -> Result<PathBuf> {
@@ -384,7 +409,7 @@ impl Memory {
 
     /// `wt/<run>` for lane 0, `wt/<run>@<lane>` for the others ('@' cannot occur in a run name).
     fn worktree_path(&self, run: &str, lane: usize) -> PathBuf {
-        self.state.join("wt").join(if lane == 0 { run.to_string() } else { format!("{run}@{lane}") })
+        self.worktrees.join(if lane == 0 { run.to_string() } else { format!("{run}@{lane}") })
     }
 
     /// Make worktree `wt` (index + files) exactly `tree`; keep ignored files.
@@ -426,7 +451,7 @@ impl Memory {
             self.git_in(&["update-ref", "--stdin"], &input)?;
         }
         let mut paths = vec![self.worktree_path(run, 0)];
-        if let Ok(dir) = std::fs::read_dir(self.state.join("wt")) {
+        if let Ok(dir) = std::fs::read_dir(&self.worktrees) {
             let lanes = format!("{run}@");
             paths.extend(dir.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&lanes)).map(|e| e.path()));
         }

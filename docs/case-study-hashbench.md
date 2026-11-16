@@ -196,7 +196,7 @@ What this says:
 
 ### 5.5 Fidelity: does replay rank policies the way the world does?
 
-I took 401 policies (π0 + 400 random v1/v2) and replayed each over the 10 live dream-arm trees. I compared that with running the same policy from the same roots in the oracle world (`results/fidelity-dream-r10.json`). This check used one history and gives no intervals; [`benchmarks/fidelity.rs`](../benchmarks/fidelity.rs) is its replacement for the Rust tool, and its full evaluation has not been run yet. The original numbers:
+I took 401 policies (π0 + 400 random v1/v2) and replayed each over the 10 live dream-arm trees. I compared that with running the same policy from the same roots in the oracle world (`results/fidelity-dream-r10.json`). This check used one history and gives no intervals; [`benchmarks/fidelity.rs`](../benchmarks/fidelity.rs) is its replacement for the Rust tool: over 100 histories per recording policy, the replay pick was never reliably better than π0 ([results](validation.md#can-replay-choose-a-better-policy)). The original numbers:
 
 | | strict | cache |
 |---|---|---|

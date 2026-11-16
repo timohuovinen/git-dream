@@ -28,7 +28,9 @@ which scores many independent histories with the tool's own replay:
     cargo run --release --example fidelity -- --smoke
     cargo run --release --example fidelity -- --reps 100 --out benchmarks/evidence/fidelity/v1
 
-The full evaluation (the second command) has not been run yet.
+The full evaluation (the second command) is recorded in
+[benchmarks/evidence/fidelity/](../../../benchmarks/evidence/fidelity/) and summarised in
+[docs/validation.md](../../../docs/validation.md#can-replay-choose-a-better-policy).
 
 For the current comparisons against random search, fixed UCB, successive halving,
 and equal allocation, see the [validation protocol](../../../docs/validation.md)

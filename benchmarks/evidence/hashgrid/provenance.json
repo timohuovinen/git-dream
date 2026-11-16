@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-16",
+  "commands": {
+    "results": "cargo run --release --locked --example hashgrid -- --seeds 500 --first-seed 70000",
+    "results-total40": "cargo run --release --locked --example hashgrid -- --seeds 500 --first-seed 70000 --total 40",
+    "inert-moves": "cargo run --release --locked --example hashgrid -- --seeds 500 --first-seed 70000 --inert-moves",
+    "inert-moves-total40": "cargo run --release --locked --example hashgrid -- --seeds 500 --first-seed 70000 --inert-moves --total 40"
+  },
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "base_revision": "eaf71737b597f9ba3c27e8824787e452c08b0219",
+  "source_state": "uncommitted changes identified by the hashes below",
+  "sha256": {
+    "benchmarks/hashgrid.rs": "ac0b82acf420f9c460ee0360428ec7b44ee6a0361335508aaf00883a4760ada1",
+    "benchmarks/grid.rs": "8f3cd99fee07f6b99fb0bd0c2fd6a56b2c1a7783f6a44d7457f4fa74741b8134",
+    "examples/hashbench/evidence/oracle.jsonl": "970d6fdb72611e0cf23e4752aaf3642ba39f36d210ea49a372e75dd18ea04232",
+    "src/agents.rs": "09c9492c4d9ec014b506a9f30d05ff5ff369e4278a6a7ede10952811efa17009",
+    "src/policies.rs": "4f77289f2e50eab061091f21c61f995be960d25102ba1b962cd2d73262318720",
+    "src/model.rs": "7bdc672678683c4c8cb1290689064bdd22fcd8eb09dc547c596ae0e09bd1672f",
+    "src/sim.rs": "cf02d316fe25e55ab10ba5472d1e3e2954521c4f7def287b196ce651e7ef193f",
+    "src/tree.rs": "77daf4b5dd11ec1befda338dbe21fa7cc4d4503a90c24476dfb5e38fae44f0b2",
+    "src/rng.rs": "3731e1b4878a5275511db8a5cb2aa188503cce1ddfa5d550cd9f2b4b09ed9d5f",
+    "src/par.rs": "c5641c8709399d078382296d982f68fcc35174d17da5a12723c6f30a1dfb0509",
+    "Cargo.lock": "c4d2888ef209c3bf627c9c44f4ca60fac74d50eb5a82169c0305b2eaa4f6effa",
+    "benchmarks/evidence/hashgrid/results.jsonl": "d5921114262ef53c4e626ba0c6face164a600f91e2d86bdfed719b5c811c57cd",
+    "benchmarks/evidence/hashgrid/results.txt": "909f2257cea7cbe03148d7bf09edb0638c452e22c56edcadbe723fb1028a49d5",
+    "benchmarks/evidence/hashgrid/results-total40.jsonl": "9b984bb7954e7782dc7a8823cc9d407e620903fde6ddae33d5c79eb7acc5f931",
+    "benchmarks/evidence/hashgrid/results-total40.txt": "993ab7ceba4000ad59f5b6cf8c664ccb92e6bdde06fe5ec42bbb356598f60ecc",
+    "benchmarks/evidence/hashgrid/inert-moves.jsonl": "73613d560daeb0df3951d4b53b686c4eb37a84337f894430a4cec38d3e88d79f",
+    "benchmarks/evidence/hashgrid/inert-moves.txt": "1e64edbf6f9d1d0bb1df91365d1bb8ab8bea38293b103f4d49b349730d0831fd",
+    "benchmarks/evidence/hashgrid/inert-moves-total40.jsonl": "2d7988410f778f4a81da19c09792875f43e7703b2d03672e197e532874bb1e09",
+    "benchmarks/evidence/hashgrid/inert-moves-total40.txt": "672048ea0ac182575a229774d4366393a51019ba7a38e64ce294152e6acb702c"
+  }
+}

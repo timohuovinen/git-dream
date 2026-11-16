@@ -1,0 +1,1792 @@
+# git-dream
+
+**Git-native experimental search for coding agents.** Preserve every attempt, inspect failures, reproduce evaluations, and compare exploration strategies using Git history.
+
+Use a fixed agent to propose changes and a fixed evaluator to score them. git-dream records the search as commits, keeps your checkout separate, and decides which attempt to continue next. Its default policy learns that from measured outcomes only.
+
+>Find better solutions per evaluation, re-using features of git instead of re-implementing them.
+
+[Dream-RSI](https://www.dream-rsi.com/) ("Recursive Self-Improvement through Evolving Worlds", Google / Google DeepMind, 2026) uses three parts:
+
+- a fixed **discovery agent** proposes changes;
+- a fixed **evaluator** scores them;
+- an **exploration policy**, which is ordinary code, decides which attempt to continue next and when to stop.
+
+In the paper, candidate policies are **dreamt** after each round: replayed offline over the recorded attempts at zero evaluation cost, and the best one is deployed. git-dream still offers that (see [Policies](#policies)), but its own evidence is that replay cannot tell whether a different policy would have done better: history only answers that where the candidate repeats what was recorded.
+
+So the default works differently:
+
+- **The `bandit` policy learns which kind of move pays.** Every attempt is a move of some type: continue the best attempt, a runner-up, a lower-ranked or a failed one, for the first or the n-th time. The policy keeps the measured rate at which each type produced a new best, and continues the attempt whose type currently looks most productive.
+- **Dreaming fits that table from history** (the *yield model*). Every number in it is an average over attempts that were really evaluated, so nothing is extrapolated. `git dream dream --dry-run` prints it with intervals.
+- **A round can be extended** instead of restarted, so runners-up and failed attempts stay continuable. On the two benchmarks here this matters more than anything else.
+
+git-dream is a single Rust binary that works in **any git repository**. The agent can be a deterministic parameter-search operator, or any program that edits code, such as an LLM coding agent. Everything is stored as ordinary git objects under `refs/dream/*`. It creates `dream/*` branches and refs while leaving your checked-out branch and files alone.
+
+```
+           ┌─────────────────── round r ───────────────────┐
+ history ─▶│ dream: fit the yield model (0 evaluations)    │─▶ policy r ─▶ explore: agent + evaluator
+  (git)    └───────────────────────────────────────────────┘               (one commit per attempt)
+    ▲                                                                                 │
+    └───────────────────── remember: refs/dream/<run>/rNN/nNNN ◀──────────────────────┘
+```
+
+## Install
+
+```bash
+cargo install --git https://github.com/timohuovinen/git-dream   # installs `git-dream`; git runs it as `git dream`
+# private repo / SSH:  CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --git ssh://git@github.com/timohuovinen/git-dream
+# from a checkout:     cargo install --path .
+```
+
+Or download a prebuilt binary from [Releases](https://github.com/timohuovinen/git-dream/releases): Linux amd64/arm64 (static, `*-unknown-linux-musl.tar.gz`) and Windows amd64 (`*-pc-windows-msvc.zip`). Put `git-dream` (`git-dream.exe`) anywhere on your `PATH`.
+
+```bash
+gh release download -R timohuovinen/git-dream -p '*x86_64-unknown-linux-musl.tar.gz'
+tar xzf git-dream-*.tar.gz && install git-dream-*/git-dream ~/.local/bin/
+```
+
+It needs git ≥ 2.31 and `sh` at run time. The examples use only `sh` and `awk`. On Windows, commands run in the `sh` that comes with [Git for Windows](https://gitforwindows.org/) (found next to `git`; override with `GIT_DREAM_SH`).
+
+**Releasing:** bump `version` in `Cargo.toml`, commit, then `git tag v0.2.1 && git push origin v0.2.1`. [.github/workflows/release.yml](.github/workflows/release.yml) builds the three binaries and publishes the release with `SHA256SUMS`.
+
+**Coding-agent skill:** [skills/git-dream](skills/git-dream/SKILL.md) lets opencode, Claude Code, Codex or Gemini handle "dream up X" in any repo. It designs an evaluator with you, then launches a detached run that uses the same agent for attempts (`skills/git-dream/scripts/dream`). Symlink the directory into the agent's skills folder, e.g. `~/.claude/skills/git-dream`, which opencode reads too.
+
+Existing users: see [configuration and behavior changes](docs/compatibility.md), especially the default held-out gate and confirmation accounting.
+
+## Quick start (seconds)
+
+```bash
+cp -r git-dream/examples/toy-space /tmp/toy && cd /tmp/toy
+git init -q && git add -A && git commit -qm init
+git dream run -n 5          # 5 rounds of: dream -> explore -> promote
+git dream run -n 2 --extend # 2 more steps in the last round's tree (every attempt stays continuable)
+git dream dream --dry-run   # what was learned: the measured yield of each kind of move
+git dream status            # scores per round, deployed policy, best attempt
+git dream show              # the last round's discovery tree
+git show dream/main/best    # the best attempt is a real commit
+```
+
+## Use it on your own repository
+
+```bash
+cd your-repo
+git dream init                 # or: git dream init --kind command
+$EDITOR .git-dream.toml        # describe the agent and the evaluator
+git add .git-dream.toml && git commit -m "git-dream config"
+git dream run -n 3
+git diff HEAD dream/main/best  # what the best attempt changed; merge or cherry-pick it
+```
+
+### 1. Parameter search (`kind = "space"`)
+
+Each attempt is your base commit plus a parameter file (default `.dream/params.json`). Your evaluator reads the parameters from that file, from `$DREAM_PARAMS` (JSON) or from `$DREAM_PARAM_<NAME>`. The agent is a pure function of (salt, parent, k): each proposal moves one or two knobs by one or two grid steps. So dreaming can predict what *any* policy would have tried, and reuse every earlier measurement of that design (`mode = "cache"`). Cache replay assumes the objective and proposal operator remain stable; whether it helps must be measured prospectively.
+
+```toml
+[agent]
+kind = "space"
+start = { threads = 4, block = 64 }
+[agent.knobs]
+threads = [1, 2, 4, 8, 16]
+block = [16, 32, 64, 128, 256]
+
+[evaluate]
+command = "cargo build --release -q && ./target/release/bench"   # last stdout line = score
+goal = "min"
+```
+
+### 2. Code changes by an agent (`kind = "command"`)
+
+The command runs in a scratch worktree checked out at the parent attempt. Whatever it leaves behind, respecting `.gitignore`, becomes the child attempt's commit. The child's parent commit is the attempt it continued.
+
+The command receives:
+
+- `$DREAM_PROMPT`: your prompt, where the attempt sits (the path so far, what has already been tried from this attempt, the round's best), and how to work;
+- `$DREAM_CONTEXT`: the whole search history as a file: every attempt of every round of the run so far (with `[dream] history = "all"`, of every run in the repository), with its write-up, its measured result and, for failures, the evaluator's output;
+- `$DREAM_MESSAGE_FILE`: a file to write the proposal into: a one-line summary (the commit subject), a blank line, then the idea, the evidence from the history and why it isn't a repeat. It's kept in full in the commit message.
+
+Both files are in `.dream-agent/` inside the worktree, so a sandboxed agent can reach them. The directory is removed before the attempt is committed.
+
+With `[explore] parallel = N`, N agents work at once, each in its own worktree (`$DREAM_LANE` is 0 to N−1, for anything that must not collide, such as a port). See [Running attempts at once](#running-attempts-at-once).
+
+This follows the exploration procedure of Dream-RSI (appendix B.1 of the paper, see [papers/](papers/)). Branches keep each attempt's code apart, and knowledge is shared because every attempt reads the *raw* history of all branches and rounds. There's no distilled "lessons" file: the paper found that injecting summarised directional insights into the prompt made the search worse (§5.1, Fig. 5). For the same reason, nothing records *why* an attempt failed. The commit records how it failed (`Dream-Failure: exit 3`, `timeout`, …), the note holds the evaluator's output, and each agent is told to check the failed code (`git show`) before deciding whether the idea or its implementation was at fault.
+
+```toml
+[agent]
+kind = "command"
+command = 'claude -p "$DREAM_PROMPT" --permission-mode acceptEdits'
+prompt = "Make `cargo bench` faster. Keep `cargo test` passing. Make one focused change."
+timeout = 1800
+
+[evaluate]
+command = "cargo test -q >/dev/null 2>&1 && ./bench.sh"
+goal = "min"
+remeasure_root = true
+confirm_top = 2
+protected = ["bench.sh", "tests"]  # reject attempts that change the evaluation contract
+
+[explore]
+budget = 6
+min_calls = 2                     # fallback to best-node refinement if a policy stops earlier
+parallel = 4                      # four agents at once; results are still measured one by one (see below)
+
+[dream]
+mode = "strict"
+holdout = 1                     # last round per run; 0 explicitly disables the gate
+```
+
+An LLM agent is stochastic, so dreaming can only replay **recorded** decisions (`strict`). It can compare stopping and continuation rules on recorded edges, but it cannot establish the outcome of changes that were never made. An LLM that reads the whole search history may also propose differently when decision order changes, even at the same parent. See [Limitations](#limitations).
+
+### The evaluator
+
+`[evaluate] command` runs (`sh -c`) in the attempt's worktree. The **last stdout line** is the score: either a number, or a JSON object such as `{"score": 12.3, "status": "ok", ...anything else}`. A non-zero exit, a timeout or `"score": null` marks the attempt as failed. Failed attempts are recorded too, and the `repair` policy can continue from them.
+
+`budget` counts proposals, including failures and no-ops. Initial/root evaluations and confirmation runs are **extra**; `status` reports actual evaluator executions separately. With confirmation enabled, candidates and the incumbent root are compared using fresh repetitions only. A failed repetition disqualifies that candidate, and the next round inherits the confirmed mean. Confirmation reduces measurement selection effects; it does not prove statistical significance.
+
+`protected` checks configured paths against the base tree before evaluating a command attempt. Rejected edits remain in Git. This catches direct test/evaluator edits; it is not a sandbox or protection against malicious code running during evaluation.
+
+Ignored build outputs (e.g. `target/`) survive between attempts in the scratch worktree, so incremental builds stay fast. Each command runs in its own process group, and the whole group is killed on timeout.
+
+### Running attempts at once
+
+An attempt is an agent run followed by an evaluation. Attempts are independent once the policy has chosen them, so they can overlap:
+
+```toml
+[explore]
+parallel = 4             # attempts in flight, each in its own worktree (default 1)
+evaluations = "alone"    # what may run while an evaluation runs (default "alone")
+```
+
+`evaluations` says how much isolation the score needs. git-dream cannot know this, so you state it:
+
+| `evaluations` | while an evaluation runs | use it when |
+|---|---|---|
+| `"alone"` | nothing else runs. Attempts go in waves: N agents work at once, then their results are measured one by one, then the next N are chosen | the score is a timing, or anything else that machine load changes |
+| `"serial"` | agents may be working, no other evaluation | the evaluator needs an exclusive resource (a port, a device) but load does not change the score |
+| `"parallel"` | anything | the score does not depend on load: a test count, an accuracy, a size |
+
+A parameter search (`kind = "space"`) proposes instantly, so `parallel` only does something there with `evaluations = "parallel"`. `git dream run --parallel N` overrides the setting for one invocation.
+
+What changes when attempts overlap:
+
+- **The policy chooses with less information.** It picks an attempt without the results of those still running. It sees them as `pending`: they count as calls, and the `bandit` policy counts each as a move that has not paid yet, which steers the others towards different kinds of move. On the measured grid this cost little per evaluation ([numbers](docs/validation.md#attempts-at-once)), but a wave can only build on earlier waves: keep `parallel` well below the number of attempts.
+- **Agents started together cannot see each other's work.** Each is told how many others started from the same attempt and asked to prefer a change they are unlikely to make. Whether LLM agents then avoid duplicates has not been measured.
+- **Everything is still recorded.** An attempt is committed as `pending` when it starts and replaced by its result. Each result records which later choices were made without it (`Dream-Seen`), so a round can be extended exactly, and a killed round has no gaps: its unfinished attempts are run again by the next `git dream run` that extends it.
+- **Build caches are per worktree.** The first build in each lane is cold.
+
+Work that never depends on your setup is always done on every core: scoring replay candidates while dreaming gives the same ranking on one thread or sixteen. Confirmation re-measurements run at once only with `evaluations = "parallel"`.
+
+## Where everything is stored
+
+| Dream-RSI | git |
+|---|---|
+| attempt | commit: its tree is the attempt's code / parameters |
+| parent attempt | parent commit (a round's root has the previous round's promoted attempt as parent) |
+| agent's write-up of the attempt | commit message (subject = summary, body = the rest) |
+| outcome | commit trailers `Dream-Score`, `Dream-Status`, `Dream-Failure`, `Dream-Design`, `Dream-Policy`, …; `Dream-Seen` when the result arrived after later attempts had been chosen |
+| evaluator output | git notes, `refs/notes/dream`: exit, metrics, first 20 + last 40 lines of stdout and stderr |
+| discovery tree | hidden refs `refs/dream/<run>/rNN/nNNN` |
+| start of a run | `refs/dream/<run>/base` |
+| best attempt | branch `dream/<run>/best` (per round: `refs/dream/<run>/rNN/best`) |
+| exploration policy | branch `dream/<run>/policy`: one commit per round (`policy.json` with the dream's ranking, the config, external policy sources), tags `dream/<run>/policy-rNN` |
+
+Attempts are written with plumbing commands (`hash-object`, `commit-tree`, `update-ref`), which never trigger git's automatic `gc`. Left alone, every attempt would keep a full compressed copy of each file it changed. So after each round git-dream runs `git repack -d`, which packs that round's attempts into one pack, storing near-identical versions as deltas, and every `gc_every` rounds it runs `git gc` to merge those packs:
+
+```toml
+[storage]
+repack = true      # default
+gc_every = 10      # default; 0 = never
+```
+
+The trees are rebuilt from commit trailers before every dream, so the repository *is* the state. `.git/dream/` only holds scratch worktrees and can be deleted at any time. Hidden refs aren't pushed by default; `git dream push [remote]` / `git dream fetch [remote]` share runs.
+
+## Commands
+
+| | |
+|---|---|
+| `git dream init [--kind space\|command]` | write a `.git-dream.toml` template |
+| `git dream run -n N [--no-dream] [--budget B] [--parallel P]` | N rounds of dream → explore → promote (`--no-dream` = fixed-policy baseline; `--parallel` = attempts in flight at once) |
+| `git dream run -n N --extend` | N steps of B more attempts in the current round's tree; the default with `[explore] extend = true` (new templates), where `--new-round` starts a round |
+| `git dream explore [--extend]` / `git dream dream [--dry-run]` | the two halves separately |
+| `git dream replay ["family:k=v,..." \| JSON ...] [-v] [--holdout N]` | score policies on recorded history: the tool for developing policies |
+| `git dream status` / `git dream show [ROUND]` | summary of a run / one round's tree |
+| `git dream policies` | policy families and their search grids |
+| `git dream push` / `fetch [REMOTE]` | share dream refs |
+| `git dream clean --run NAME --yes` | delete a run |
+
+Run-oriented commands take `--run NAME` and `--config FILE`. Runs are independent by default, e.g. `--run baseline --no-dream` against `--run dream`.
+
+A run is one discovery process, the paper's history H: what dreaming replays and what each agent reads is that run's rounds. That keeps a comparison fair, since a baseline that reads the other arm's attempts is no longer a baseline. To pool knowledge instead, set `[dream] history = "all"`. Recorded rounds then feed both dreaming and the agents' history file, with each attempt labelled by its run. Replay requires matching agent/evaluator configurations and base commits. It's one setting because the paper has one history. Nothing is copied between runs: the history is read from the runs' refs, and `git show` works across them.
+
+## Policies
+
+Built-in families ([src/policies.rs](src/policies.rs)):
+
+- `bandit` (the default): learns from measured outcomes which kind of move pays. See below;
+- `refine_best`: π0, always continue the best attempt;
+- `random` (uniform valid-parent selection), `ucb`, `beam`, `softmax`;
+- `repair`: continues failed attempts and merges identical designs. It came out of the [case study](docs/case-study-hashbench.md).
+
+### The default: `bandit` and the yield model
+
+A move is "continue node n for the k-th time". Its type is who n is (the `best` attempt, a runner-up `next`, any other scored attempt `rest`, or a `fail`ed one) and how often n was continued before (0, 1–2, 3–6, 7–14, 15+ times). Its outcome is measured: did the attempt become the new best? ([src/model.rs](src/model.rs))
+
+- Within a round, the policy keeps a Beta posterior per move type, updates it after every attempt and continues the node whose type draws the highest yield. Identical designs act as one node. A best attempt that keeps failing loses to its runners-up without any hand-set limit.
+- When a new round starts, dreaming fits the same table over all recorded rounds (old attempts count less: `halflife`) and stores it in the policy's spec, so each policy commit shows what was learned and from how many attempts.
+- The decision is a pure function of (tree, parameters, seed). A recorded round therefore replays exactly, and `git dream run --extend` continues it as if it had never stopped. It also finishes a round that was killed.
+
+Parameters (`initial = { family = "bandit", params = { ... } }`): `m` prior weight in attempts (4), `focus` how strongly the most productive type is preferred (16; 1 = Thompson sampling, "inf" = greedy), `gamma` credit for the moves that led to a new best (0.5), `eps` minimum relative improvement that counts (0; raise it for noisy evaluators), `halflife` (48 attempts), `stop` end the round when no type is expected to pay at least this often (0 = never).
+
+### Replay-tuned families
+
+With any other initial policy (or `[dream] method = "replay"`), dreaming works as in the paper. A dream samples `candidates` parameterisations from the families' grids. It deduplicates candidate specifications and ranks them on training rounds by
+
+    J = mean over rounds [ relative improvement found − λ · calls / budget ]
+
+The deployed policy is always a candidate and wins training ties. By default `[dream] holdout = 1` reserves the newest round of each run; its measurements do not enter the training cache. Only the training winner is checked on that partition. It must improve held-out J and have no higher miss rate than the incumbent. The policy commit records the candidate, deployment decision, and validation scores. With insufficient history the incumbent stays deployed; `holdout = 0` restores unguarded selection.
+
+Repeatedly consulting this moving partition makes it a deployment diagnostic, not an untouched final test set. A miss is an unknown outcome charged as a failed call: that pessimistic surrogate can favor recorded paths or early stopping. A low miss rate is not a guarantee of unbiased policy ranking. Configuration and base-commit compatibility are checked before pooling replay histories.
+
+To preserve data collection, set `[explore] min_calls` to a positive floor (the generated templates do this). If a policy stops before the floor, best-node refinement supplies the remaining proposals. The floor is part of the stored policy and is applied during replay too. Setting it equal to `budget` enables comparisons with equal proposal budgets. It does not guarantee diverse exploration.
+
+```bash
+git dream replay "refine_best" "ucb:c=0.05" --holdout 1
+cargo run --release --locked --example compare -- --seeds 100 > results.jsonl
+cargo run --release --locked --example summarize -- results.jsonl
+```
+
+See [the validation protocol and results](docs/validation.md) for independent prospective evaluations, random search, fixed UCB, successive halving, equal allocation, costs, and paired uncertainty intervals.
+
+### Writing new policies (in any language)
+
+The paper's real lever is a **policy-development agent** that writes *new* policy code after reading the history. There are two ways to add a family:
+
+1. **In Rust:** add a variant in [src/policies.rs](src/policies.rs) and rebuild.
+2. **As an external program:** git-dream starts it once and asks it one JSON line per decision.
+
+```toml
+[policies.external.patient]
+command = "./target/release/examples/patient"   # run from the repository root
+source = "policies/patient.rs"                  # optional: snapshot into each policy commit
+timeout = 10                                   # seconds per request/reply (default)
+grid = { p = [3, 5, 8] }                  # non-empty grid => searched while dreaming
+```
+
+Request: `{"params": {"p": 5}, "seed": 3, "tree": {"goal": "min", "budget": 20, "calls": 4, "nodes": [{"id", "parent", "k", "design", "score", "status", "change", "n_exp"}, ...]}}`
+Reply: a node id to continue, or `null` to end the round. The reply must depend only on the request, or replay can't reproduce live rounds.
+
+With `[explore] parallel`, attempts still running appear as nodes with `"status": "pending"` and no score. They count as calls and in their parent's `n_exp`, and they can't be continued. After `null`, git-dream asks again when a running attempt finishes, and the round ends when nothing is running.
+
+A complete example in Rust, [policies/patient.rs](policies/patient.rs) (`cargo build --release --example patient`), continues the best attempt and stops after `p` calls without improvement.
+
+
+```bash
+git dream replay "patient:p=5" "repair:c=0.02,fp=0.03,kmax=6,kfail=2,patience=12,eps=0.005,dedup=true" -v
+```
+
+A good prompt for the meta-agent: *"Read `git dream status`, `git dream show` for the last rounds and `git dream replay -v`. Find where the deployed policy wastes calls, write a new policy, compare training and held-out replay, then freeze it and compare fresh runs against strong fixed baselines at equal total cost. Do not treat replay gains as evidence of live gains."*
+
+## Does it work?
+
+- **[Yield-model bandit](docs/validation.md#yield-model-bandit-and-extended-rounds):** on seeds never used in development, at equal evaluations. Synthetic rugged landscape: mean regret 57.4 with `refine_best`, 21.8 with `bandit`, 12.3 when the round is extended instead of restarted. Measured hash-table grid (982 designs, 4 in 10 fail, 6% noise): gap to the best design 51.8% → 4.4%, and 2.4% extended. No gain on the deceptive landscape, where successive halving with random restarts stays far ahead. Refitting the model between rounds only helped when rounds were very short. Deterministic agents only: no LLM-agent evidence yet.
+- **[Attempts at once](docs/validation.md#attempts-at-once):** on the same measured grid, 320 evaluations run 16 at a time (20 waves instead of 320 steps) ended 2.7% from the best design, against 2.4% one at a time. The same 20 steps spent one attempt at a time ended 98% away. With only 40 evaluations the cost of choosing blind is larger (39% → 53% at 16 at once). Simulated with a deterministic agent; on a real toy repository the wall-clock time for 24 attempts fell from 13.4 s to 2.4 s with 8 at once.
+- **[Prospective synthetic comparison](docs/validation.md):** 100 fresh seeds on each of three landscapes, ten methods, 97 objective evaluations per fixed-budget method. Guarded adaptive search matched fixed refinement's final quality; it did not demonstrate a quality advantage. Multi-start successive halving performed better on these tasks. A separate stopping arm saved calls on some tasks. All traces and paired intervals are included.
+- **[Inspectable coding example](docs/case-study-log-count.md):** a supplied Rust optimization changed linear key lookup to hash aggregation. Fresh confirmation means were 25.16 ms before and 1.16 ms after on the included fixture. A deliberate incorrect control failed. The full Git history, notes and policy are bundled. The adapter replays supplied candidates; this is not an autonomous LLM search or evidence for adaptive policy superiority.
+
+Earlier evidence (different prototype/configurations, not rerun under the new gate):
+
+- **[Case study: high-load hash tables](docs/case-study-hashbench.md).** Run with the research prototype this tool came from: 722 real benchmark runs, all stored in git. With the second-generation `repair` policy, dreaming cut the remaining gap to the true optimum from **14.6% to 8.4% with 26% fewer evaluations** (100 synthetic replicates, paired difference +0.061 ± 0.022). Live dreamt rounds found the optimum in 16–17 calls, where the fixed policy spent 40. The first policy families gave **no** gain. Strict replay did **worse** than not dreaming, and replay ranked policies poorly (Spearman ≈ 0.1).
+- **Toy example** (`examples/toy-space`, 10 agent salts × 6 rounds of 25 calls, `--no-dream` vs dreaming): **104 vs 150 evaluations**, gap to the optimum **10.9% vs 13.6%**, optimum reached in 5/10 vs 4/10 runs. Ten replicates is too few to call the quality difference real; the call reduction is consistent.
+
+## Limitations
+
+- **The yield model is coarse.** It knows 20 kinds of move, not your problem. It cannot plan a detour through worse attempts, and with fewer than a few dozen attempts it is mostly its prior. Its parameters were chosen on the two benchmarks it is reported on.
+- **Short rounds discard the search.** A new round keeps only the promoted attempt. Prefer `extend = true`; start a new round when scores from earlier attempts stop being comparable (machine drift, changed evaluator inputs).
+- **Replay knows only what was recorded.** It can't predict untried changes. With a stochastic agent (an LLM), only recorded decisions replay (`strict`), and the case study found strict dreaming can do harm. Use prospective evaluation before relying on an adapted policy; held-out replay does not correct behavior-policy selection or missing support.
+- **Early stopping can lock in.** Once rounds stop improving, the cheapest policy on replay is one that stops early. It then records too little new history to escape a local optimum. This showed up in the toy runs. Use `min_calls`, full-budget control runs, and independent data collection. Continuing an already adapted run with `--no-dream` freezes its current policy; a fresh named run is needed for an initial-policy baseline.
+- **Replay is a filter, not an oracle.** Its policy ranking correlated weakly with true performance in the case study.
+- **Attempts at once trade information for time.** Each choice is made without the results still in flight. With `evaluations = "alone"` and a deterministic agent the round is still reproducible; otherwise which results a choice knew depends on timing (it is recorded, so the round can be extended, but a second run may differ). Replay scores rounds one attempt at a time, so it does not reproduce a round recorded with several at once. Identical designs proposed at the same time are each measured, even with `reuse = true`. Nothing here has been measured with LLM agents.
+- **Reproducibility has boundaries.** Git preserves source and recorded outcomes, not the machine, toolchain, dependencies, model service, or random output of an external agent. Pin these separately. Ignored build caches can affect timing.
+- **External policies:** invalid replies and process failures abort replay instead of earning a stopping reward. Each request/reply has a configurable deadline (default 10 seconds); timeouts kill the policy process group and abort the operation.
+- **Noisy benchmarks:** use `remeasure_root = true` and `normalize = "root"` against machine drift, and `confirm_top = k` to reduce promotion of lucky measurements.
+- The evaluator runs whatever command the config names, and a command agent can edit anything in its worktree. Run untrusted configs in a sandbox.
+
+## Repository layout
+
+```
+src/                the tool: memory.rs (git layout), engine.rs (config, rounds, running attempts), model.rs (yield
+                    model, bandit), sim.rs (replay), policies.rs, agents.rs (space/command agents, evaluator),
+                    par.rs (jobs at once), rng.rs, main.rs (CLI)
+tests/e2e.rs        end-to-end tests on the examples in throwaway repositories (cargo test)
+examples/           projects to run `git dream` on, one folder each: toy-space (parameter search), toy-command
+                    (code-editing agent), log-count (a Rust optimization), hashbench (config, evaluator source and
+                    patch for the hash-table crate). `<project>/evidence/` holds what a recorded run of it produced
+benchmarks/         programs that measure the tool itself: compare.rs, hashgrid.rs and fidelity.rs (prospective
+                    comparisons), summarize.rs and score.rs (reports). Run as `cargo run --release --example <name>`.
+                    benchmarks/evidence/<benchmark>/ holds a benchmark's recorded output (compare: the traces
+                    behind docs/validation.md)
+policies/           patient.rs: a sample external policy, written as a standalone program
+docs/               case studies, validation protocol and limitations
+meta/               git-dream applied to its own source (configs and evaluators for self-improvement runs)
+skills/             the git-dream agent skill
+```
+# Case study: Dream-RSI on git for high-load hash tables
+
+> This is the experiment `git-dream` grew out of. It was run with a Python research prototype, inside a private hash-table benchmark crate (`hashbench`). The prototype's scripts and raw outputs are no longer in the working tree: they are in this repository's history up to commit `7d0167c` (for example `git show 7d0167c:research/hashbench/dream.py`). The evaluator source and the benchmark patch are in [`examples/hashbench/`](../examples/hashbench/), and the oracle grid in [`examples/hashbench/evidence/`](../examples/hashbench/evidence/). The `git-dream` tool ([`src/`](../src/), Rust) is that prototype rewritten and made repository-agnostic, and [`examples/hashbench/`](../examples/hashbench/) expresses the same task as a `.git-dream.toml`. Paths and commands below refer to the original setup. The current Rust implementation adds a held-out deployment gate, exploration floors, and fresh-only confirmation; those changes were not used to obtain the archived results. See the [current validation protocol](validation.md) and [configuration changes](compatibility.md).
+
+This is a working, minimal re-creation of **Dream-RSI** ("Recursive Self-Improvement through Evolving Worlds", Google / Google DeepMind et al., 2026, [dream-rsi.com](https://www.dream-rsi.com/)). It uses **git as the only experimental memory**. The loop is applied to a real optimisation task: finding the fastest fixed-capacity open-addressing hash-table design at 95–98% load. The hash tables come from `hashbench/`.
+
+Code (original layout): a worktree `dream-rsi/` on branch `dream/main` of the `hashbench` repository. Entry point: `dream.py`. The hashbench changes it needed are in [`hashbench-funnel-simd-groups.patch`](../examples/hashbench/hashbench-funnel-simd-groups.patch) and [`dream-eval.rs`](../examples/hashbench/dream-eval.rs).
+
+## TL;DR
+
+- **The whole loop runs on plain git.** Explore, remember, dream and improve all work with ordinary commits, commit trailers, git notes and refs. There's no database and no model training. 722 real evaluations live in the repo: 732 commits under `refs/dream/*`, which is every attempt plus each round's root, including 10 roots whose scores were carried over rather than re-measured. A discovery tree is rebuilt from git alone before every dream step.
+- **Dreaming is cheap.** Replaying 1,000 candidate exploration policies over the whole recorded history takes 0.1–1 s, with zero new evaluations.
+- **Dreaming with the first policy families changed nothing.** In rounds 2–6 the dream re-selected the hand-written π0 every time: nothing beat it on replay. Inspection of the recorded trees motivated a v2 policy family (`repair`, mainly its *dedup* rule), corresponding to the paper's policy-development step.
+- **With v2, dreaming helped measurably.** Over 100 synthetic replicates in an oracle-backed world, the remaining gap to the true optimum after 8 rounds fell from **14.6% (fixed π0) to 8.4% (Dream-RSI)**. The paired difference was +0.061 ± 0.022, using **26% fewer evaluations** (238 vs 320).
+- **Live, the dream arm reached the true optimum** (1.000×) after 273 evaluations, with rounds of 16–17 calls. The fixed arm was still 1.27× off after 400. The two arms had already diverged by luck before the policies differed, so this live run is anecdotal (n=1).
+- **Honest limits:**
+  - Replay ranks individual policies poorly: Spearman correlation 0.01–0.10 against the true ranking.
+  - Paper-faithful *strict* replay, which only trusts recorded edges, made results **worse** (1.193× vs 1.146×). The gains come from cross-tree reuse, which is valid only because this task's discovery agent is deterministic.
+  - Measurement noise (~5–9%) and machine drift (+23% mid-session) create a real winner's-curse risk.
+- **Hash-table finding.** At 95%/98% load the best design found is `W16-b1-L4-r0.25-o0.01`: a 4-level funnel table with 16-wide SIMD buckets, level ratio 1/4 and 1% overflow. It averages **19.4 ns/op against 71.6 for SwissTable-style probing at the same fixed capacity (3.7×)**. Failed lookups at 98% cost 19 ns instead of 286 ns, and the worst case is 8 probes instead of 1,371.
+
+## 1. What Dream-RSI is, and how it maps onto git
+
+From the project page, Dream-RSI has four parts:
+
+1. An **exploration policy** is *executable code*. Given what it has seen, it decides which attempt to continue next and when to stop. It steers a *fixed* discovery agent. Its outcomes are scored by a *fixed* evaluator.
+2. **Online**, the current policy expands a *discovery tree*. Each node is one attempt with the outcome it actually produced.
+3. **Dreaming**: an alternative policy never has to re-run anything. *"It walks the same recorded tree in a different order, and every outcome it asks for is already on disk."* A policy-development agent writes revisions of the policy, and each revision is scored by replaying it over the whole history.
+4. **Selection**: pick the argmax. The deployed policy is itself a candidate, so the winner is never worse *on replay*. The paper's baseline is **Recursive Fixed Exploration**: same agent, evaluator and budget, but the policy never changes.
+
+The mapping used here:
+
+| Dream-RSI concept | This implementation |
+|---|---|
+| Discovery agent (LLM coding agent in the paper) | `space.agent(design, k)`: deterministic local mutation, the k-th proposal from a design (`space.py`) |
+| Fixed evaluator | `target/release/dream-eval` (Rust, [dream-eval.rs](../examples/hashbench/dream-eval.rs)) |
+| Attempt | one **commit**; its tree = frozen world (`tag dream/world`) + `dream/attempt.json` |
+| Parent attempt | the commit's **parent** (a round's root has the previous round's best as parent, so all rounds form one DAG) |
+| Outcome / score | **commit-message trailers** (`Dream-Score`, `Dream-Status`, `Dream-Design`, …) |
+| Full diagnostics | **git notes** `refs/notes/dream` (per-load ns, probe counts, bytes) |
+| Discovery tree | hidden refs `refs/dream/<arm>/r<NN>/n<NNN>` |
+| Exploration path | branch `dream/<arm>/r<NN>-best`; `git log` on it shows the lineage |
+| Exploration policy (versioned code) | branch `dream/<arm>/policy`: one commit per round with `policy.json` + snapshot of `policies.py`, tags `dream/<arm>/policy-r<NN>` |
+| Dreaming (offline replay) | `sim.py`: `ReplayWorld`, `replay`, `dream` |
+| Policy-development agent | (a) automatic: random search over parametric policy families; (b) inspection of recorded trees followed by development of a new family |
+
+An attempt commit, exactly as stored:
+
+```
+attempt(shared r1 n002): W 64->16
+
+design: W16-b1-L0-r0.5-o0.05
+parent: n001 W64-b1-L0-r0.5-o0.05 (49.26 ns/op)
+result: ok 76.49 ns/op (+55.3% vs parent)
+
+Dream-Arm: shared
+Dream-Round: 1
+Dream-Node: 2
+Dream-Parent-Node: 1
+Dream-Expansion: 0
+Dream-Design: W16-b1-L0-r0.5-o0.05
+Dream-Policy: refine_best()
+Dream-Budget: 40
+Dream-Status: ok
+Dream-Score: 76.494
+```
+
+Commits are written with plumbing (`hash-object`, `mktree`, `commit-tree`, `update-ref`, `notes add`), about 6 git calls per attempt. The working tree is never touched. History is read back with one `for-each-ref` and one `log --no-walk --stdin` per tree, which parses trailers only. The lineage that found the optimum in the live run is a plain `git log`:
+
+```
+$ git log --first-parent --format='%h %s' dream/dream/r08-best   (oldest first, abridged)
+6b70215 root(shared r1): W16-b1-L0-r0.5-o0.05          # SwissTable-style start, 81.7 ns/op
+3647361 attempt(shared r1 n001): W 16->64
+17c4779 attempt(shared r1 n032): L 0->2                 # the funnel breakthrough, 28.6
+abc777e attempt(dream r2 n011): r 0.5->0.25
+79d36b6 attempt(dream r2 n022): o 0.02->0.005           # 24.7
+8ad7418 attempt(dream r5 n014): W 64->16, L 2->3        # 21.7
+425b5d0 attempt(dream r7 n004): L 2->4, o 0.02->0.005
+16d136b attempt(dream r8 n001): o 0.005->0.01           # true optimum (oracle 19.37)
+```
+
+## 2. The task
+
+**Objective** (fixed evaluator, lower is better). Use a fixed-capacity table of 2²¹ slots holding u64→u64 entries (36 MB, just above the 32 MB L3 of the Ryzen 7 9700X it ran on). For each load α ∈ {0.95, 0.98}:
+1. Fill to α.
+2. Run 1M successful lookups in random order.
+3. Run 1M failed lookups.
+
+The score is the mean over α of (insert + hit + miss)/3 in ns/op. Every phase is the minimum of 3 repetitions, and the evaluator is pinned to one core. If any insert hits `Full`, the design is invalid at that load. One evaluation takes about 0.8 s.
+
+**Design space.** 982 distinct designs on the existing `Funnel` engine in hashbench (Farach-Colton, Krapivin & Kuszmaul 2025). I added one knob: buckets spanning several SIMD groups.
+
+| knob | values | meaning |
+|---|---|---|
+| `W` | 16, 64 | SIMD control-group width (SSE2 / AVX-512 = one cache line) |
+| `b` | 1, 2 | SIMD groups per level bucket (β = b·W) |
+| `L` | 0,1,2,3,4,5,6,8 | funnel levels (0 = pure SwissTable-style linear group probing) |
+| `r` | .25 … .75 | geometric level-size ratio |
+| `o` | .005 … .12 | overflow-region fraction |
+
+192 of the 982 designs are invalid: they cannot hold 98% load. Most of these have 1 or 2 levels.
+
+**Discovery agent.** `agent(design, k)` changes 1 knob (70%) or 2 knobs, by ±1 grid step (80%) or ±2. It is seeded by sha256(salt, design, k). Because it's a pure function, the agent's proposal for any "what if we had continued node n once more" is always computable. Only its *score* can be unknown. This property matters in §3.
+
+## 3. Dreaming: how replay works
+
+`ReplayWorld` answers one question: the agent proposed design *d* as the k-th continuation of node *n*; what score does it get?
+
+1. **Recorded edge first.** If this exact (parent attempt, k) was recorded in the tree being replayed, return the recorded outcome. The deployed policy therefore replays its own tree bit for bit (verified).
+2. Off the recorded path:
+   - **strict** mode: nothing else is known. This is all you can assume with a stochastic LLM agent, and it matches the paper's "a policy can only be dreamt where history actually went".
+   - **cache** mode: use any recorded measurement of design *d* from anywhere in the history. This is valid here only because the agent is deterministic and a design's score doesn't depend on how it was reached. It is **drift-corrected**: scores are stored relative to the root of the tree that measured them, then rescaled to the root of the tree being replayed.
+3. Anything else is a **MISS**. The project page doesn't say how unrecorded nodes are handled, so I chose a pessimistic rule. The call is still charged and the attempt counts as a failure. This is a pessimistic surrogate for an unknown outcome; it can favor recorded paths and early stopping, so it does not remove selection bias.
+
+**Objective.** For each recorded tree, the policy starts at that tree's root with that round's budget (40). The objective is
+
+J = mean over trees of [ (root − best found)/root − λ·calls/budget ],  with λ = 0.02
+
+In words: a 2% speedup is worth one full round of compute. Policies may stop early.
+
+**Dream step.** Score the deployed policy and 1,000 sampled candidates (300 in the synthetic study) by replay over the whole history, then take the argmax. The deployed policy wins ties. The winner is committed to `dream/dream/policy` with its replay diagnostics (`top5`, J before and after, miss rate) and deployed in the next round.
+
+## 4. Policies
+
+All policies share one interface: `select(tree) -> node_id | None`. They live in `policies.py` and are serialised as `{"family", "params"}`.
+
+- **π0 `refine_best`** (hand-written start, like the paper's): always continue the best attempt, spend the whole budget.
+- **v1 families**:
+  - `ucb`: quality + c·exploration bonus, with `kmax` continuations per node and patience/eps stopping.
+  - `beam`: top-m attempts, least-continued first.
+  - `softmax`: sampling ∝ exp(−Δ/T).
+- **v2 family `repair`** was developed after inspection of the recorded trees (commit `da1e0ab`). It makes two changes:
+  - **Repair failures.** It may continue *failed* attempts, valued at their nearest valid ancestor's score × (1+fp), at most `kfail` times. 45% of live calls were designs that overflow, and a failed L1 design is often one step from a working L2.
+  - **Dedup.** All copies of a design act as one node: continue the copy that has explored furthest, and value the design by the mean of its measurements. The agent's k-th proposal depends on (design, k), so continuing a fresh copy of an already-explored design just replays old proposals. Round 1 had only 11 distinct designs among 41 attempts.
+
+In the end, replay mostly selected `dedup=True`, with mixed `kfail` values. The dedup rule is what carried the improvement (see the exhaustive sweep in §5.2).
+
+## 5. Experiments and results
+
+All live numbers are real measurements stored in git. "Oracle" means one uniform sweep of all 982 designs (`dream/results/oracle.jsonl`). The dream **never** sees the oracle. It is used only to score how good a found design truly is and to drive the synthetic replicates. Optimum: `W16-b1-L4-r0.25-o0.01`, 19.37 ns/op.
+
+### 5.1 Live run, rounds 1–6 (v1 families): dreaming re-selected π0
+
+Round 1 is shared by both arms and is identical by construction. Budget is 40 calls per round.
+
+- **Round 1** found the funnel breakthrough (81.7 → 28.6 ns/op), but only on call 32. π0 spent 31 calls re-continuing one node (`W64-L0`) whose only possible mutations were duplicates (`W 64→16`) or overflowing `L1` designs.
+- **Every dream step (r2–r6)** returned π0. The top 5 of 1,000 candidates tied with it exactly, and all were greedy variants. Two reasons:
+  1. The recorded world was tiny where it mattered. Policies that branch elsewhere run into MISSes, and policies that stop early lose round 1's 65% gain.
+  2. J is dominated by that round-1 gain, so saving compute on plateaus never paid for missing it.
+
+  This is the same limitation the page states (dreaming is exact only where history went), observed in practice.
+- With the same π0, the two arms diverged by measurement noise. In r5 the "dream" arm stumbled into `W16-L3` (oracle 20.43). The fixed arm stayed in the `W64-L2` basin (24.68).
+
+### 5.2 Policy-development step
+
+I read the recorded trees: the duplicate proposals, the 45% overflow failures and the late breakthrough. From that I wrote the `repair` family. An exhaustive replay sweep of its 36,000 parameter settings over the 6 recorded trees gave:
+
+| replay mode | best `repair` J | π0 J |
+|---|---|---|
+| cache | **0.173** (dedup=True) → 0.209 with drift correction | 0.132 |
+| strict | 0.132 (identical to π0) | 0.132 |
+
+Without dedup, even the best `repair` setting only tied π0.
+
+### 5.3 Live run, rounds 7–10 (v2 families available, roots re-measured)
+
+| round | fixed arm (π0) calls → true quality | dream arm: dreamt policy | calls → true quality |
+|---|---|---|---|
+| 6 (state) | cum 240, 1.274× opt | (π0 so far) | cum 240, 1.055× |
+| 7 | 40, 1.469×¹ | `repair(c=.02,fp=.3,kmax=3,kfail=4,patience=16,dedup)` | **16**, 1.003× |
+| 8 | 40, 1.342×¹ | `repair(c=0,fp=.01,kmax=3,kfail=4,patience=16,dedup)` | **17**, **1.000×** |
+| 9 | 40, 1.274× | `ucb(c=.05)` | 40, 1.000× |
+| 10 | 40, 1.274× (cum 400) | `repair(c=.1,fp=.3,kfail=4,dedup)` | 40, 1.104×² (cum 353) |
+
+¹ The incumbent is chosen by its *recorded* (noisy) score, so it can swap to a truly worse design. This is the winner's curse.
+² The same effect: a lucky 22.41 reading made `W16-L5` (true 21.38) beat the root's fresh 21.75.
+
+The dream arm behaved qualitatively the way the paper reports. When the replayed history said progress was likely cheap, it **conserved compute** (16–17 calls instead of 40). When gains plateaued, it **spent again** (40). Note what the replay diagnostics showed, though. The r7 winner's replay J fell from 0.32 to 0.10 once its own round entered history, because it had a 58% miss rate. Selection over 1,000 candidates on sparse history is optimistic.
+
+### 5.4 Synthetic replicates (100 per configuration, oracle world + 6% noise)
+
+This runs the full protocol (shared r1, then 7 rounds per arm) in a world backed by the oracle sweep, with multiplicative Gaussian noise matching the measured noise level. Each replicate uses a different agent salt. Values are means after 8 rounds:
+
+| configuration | fixed π0: gap to opt / calls | Dream-RSI: gap / calls | paired Δgap (± s.e.) | dream better / tie / worse |
+|---|---|---|---|---|
+| v1 families, cache replay | 14.6% / 320 | 12.9% / 243 | +0.017 ± 0.016 (n.s.) | 41 / 17 / 42 |
+| **v2 families, cache replay** | 14.6% / 320 | **8.4% / 238** | **+0.061 ± 0.022** | 50 / 11 / 39 |
+| v2 families, λ = 0 | 14.6% / 320 | 8.8% / 282 | +0.058 ± 0.015 | 49 / 15 / 36 |
+| v2 families, **strict** replay | 14.6% / 320 | 19.3% / 195 | −0.047 ± 0.014 (worse) | 29 / 21 / 50 |
+
+What this says:
+- **v1** (the families the live dream also had in r2–r6) buys 24% less compute at statistically equal quality.
+- **v2** is the first configuration where dreaming improves *quality* as well as cost. The improvement doesn't depend on the compute penalty (the λ=0 row).
+- **Strict** replay doesn't work in this setting. With only recorded edges, alternatives are mostly MISSes. The dream learns to stop early and settles too soon.
+- Early rounds are a weak spot. After round 2 the dream arm is slightly *behind* (1.235× vs 1.200×), because a policy dreamt on a single tree overfits it. The benefit appears from round 4 on, as history accumulates.
+
+### 5.5 Fidelity: does replay rank policies the way the world does?
+
+I took 401 policies (π0 + 400 random v1/v2) and replayed each over the 10 live dream-arm trees. I compared that with running the same policy from the same roots in the oracle world (`results/fidelity-dream-r10.json`). This check used one history and gives no intervals; [`benchmarks/fidelity.rs`](../benchmarks/fidelity.rs) is its replacement for the Rust tool, and its full evaluation has not been run yet. The original numbers:
+
+| | strict | cache |
+|---|---|---|
+| Spearman ρ(replay J, true J) | 0.01 | 0.10 |
+| mean miss rate | 42% | 14% |
+| true percentile of the replay-selected policy | 88% | 88% |
+
+Ranking fidelity across *all* policies is weak. Most candidates drift into unrecorded territory, where MISSes dominate their score. Even so, the argmax lands in the top ~12% of true quality, which is why selection still helps on average (§5.4). The truly best policy in that pool was also a dedup `repair` (true J 0.166). The replay-selected one scored 0.073, the same as π0. There is clear headroom for better replay.
+
+## 6. The hash-table result
+
+| design (fixed capacity, 36 MB) | ns/op | 95%: ins / hit / miss | 98%: ins / hit / miss | max probes @98% |
+|---|---|---|---|---|
+| SwissTable-style `W16-L0` (root) | 71.6 | 19.0 / 21.1 / 55.9 | 22.6 / 24.8 / **286** | 1371 |
+| SwissTable-style `W64-L0` | 51.2 | 21.2 / 23.6 / 43.9 | 23.6 / 26.5 / 168 | 343 |
+| fixed arm's best `W64-b1-L2-r0.25-o0.005` | 24.7 | 22.4 / 24.2 / 23.0 | 22.5 / 27.7 / 28.3 | 7 |
+| **optimum `W16-b1-L4-r0.25-o0.01`** | **19.4** | 19.3 / 20.0 / 17.7 | 19.4 / 20.6 / **19.2** | **8** |
+| hashbrown (reference only: grows itself, ~48% load, **71 MB**) | 17.2 | 31.8 / 15.6 / 4.3 | — | — |
+
+The basin of good designs is consistent: **16-wide groups, level ratio r = 1/4, 3–5 levels, ≤ 3% overflow**. Many designs within ~5% of the optimum are statistically tied at this noise level. The hashbench session's independent probe sweep reached the same conclusion (L=3, r=0.25, 2–3% overflow). At half the memory, the funnel table comes within about 13% of hashbrown's op cost. Swiss-style probing at the same capacity collapses on failed lookups.
+
+Cross-checks from the parallel hashbench session (branch `bench/main`), and what they mean for this objective:
+- **Lookup inlining.** That session found `Funnel::get` compiled out of line in its harness, costing about 5 ns per DRAM-resident lookup. I rebuilt `dream-eval` with `#[inline(always)]` on `get` and measured 10 designs, interleaved with the original binary. The new/old ratio was 0.955–1.048 (mean ≈ 1.00, within noise), with rank correlation 0.99. In this harness at this size, there is no measurable handicap, and the recorded scores and rankings stand.
+- **Larger tables.** At 7.3M keys (fully DRAM-resident), hashbrown at its own 87.5% load beats funnel16 L3 r0.25 o0.03 at 95% on successful lookups: 20.7 vs 27.5 ns. Failed lookups are equal (≈18.7 ns). At 99% load that design overflows (`full`), and L4 r0.5 o0.03 is needed. This objective (2²¹ slots, 95/98%) doesn't see either effect.
+- **Churn.** Under delete/insert churn, greedy funnel placement drifts keys into the overflow region and needs rebuilds in random order. This objective is insert-only, so it doesn't measure that.
+
+## 7. Lessons and limitations
+
+1. **Git really is enough as memory.** Commits, trailers, notes and refs give you an append-only, inspectable and diffable discovery DAG, and `git log` shows the lineage for free. One caveat: `git gc --prune` must not remove `refs/dream/*`. Those are ordinary refs, so normal gc keeps them.
+2. **Dreaming is bounded by coverage.** Exact replay exists only where history went. With the paper-faithful strict rule, alternatives are mostly MISSes, and in this task that made the dream *worse*. The cross-tree cache is what made it useful, and it is valid only because the agent here is deterministic. With an LLM agent, replay cannot establish outcomes for unobserved changes. Fresh prospective evaluations are needed to test policy improvements; a learned outcome model would introduce additional assumptions.
+3. **The policy space matters more than the search over it.** 1,000 random v1 candidates per round never beat π0. One additional family, `repair` with dedup, based on reading the trees, did. This matches the paper's framing: the policy-development agent writes *code*, it doesn't just tune knobs.
+4. **Noise and drift are first-class problems.** Measurement noise was ~5–9%. The machine slowed by about 23% mid-session when another benchmark started sharing DRAM/L3. Without the three corrections (fresh root measurements, drift-normalised cache, a single uniform oracle sweep), scores from different times aren't comparable. Incumbents chosen by recorded score suffer the winner's curse (§5.3 r10). The current Rust tool remeasures finalists and the incumbent root using fresh repetitions, rejecting candidates with failed confirmations. That protection was absent from these archived runs.
+5. **Replay is optimistic about its own pick.** The replay J of the selected policy dropped sharply once its own round entered history. The current Rust tool reserves recent rounds for a deployment check and rejects a candidate with a higher held-out miss rate. These checks diagnose some overfitting; they do not eliminate behavior-policy selection or make repeatedly consulted rounds an untouched test set.
+6. **Scope.** The discovery agent is a mutation operator, not an LLM. The design space is a 982-point grid, so the oracle can be measured exhaustively, which is what made validation possible. The paper's tasks are open-ended code. The machinery here (git memory, replay, selection, versioned policies) carries over unchanged. Only `agent` and `dream-eval` would be replaced: by an LLM producing a code diff per attempt, and by a build-and-benchmark of that commit.
+
+## 8. Reproducing
+
+```bash
+cd dream-rsi
+cargo build --release && cargo test --release          # incl. multi-group bucket tests
+python3 dream/dream.py experiment --rounds 10           # live: resumes from git, skips recorded rounds
+python3 dream/dream.py show --arm shared --round 1      # print a discovery tree rebuilt from git
+python3 dream/dream.py report                           # live arms vs oracle
+python3 dream/dream.py oracle                           # measure all 982 designs (~15 min)
+python3 dream/dream.py synthetic --reps 100 --rounds 8 --families v2 --tag v2
+python3 dream/dream.py fidelity --arm dream --upto 10
+
+git log --oneline dream/dream/policy                    # every deployed policy, one commit per round
+git show dream/dream/policy-r07:policy.json             # its replay diagnostics (top-5, J, miss rate)
+git notes --ref=dream show dream/dream/r08-best         # full evaluator output of an attempt
+```
+
+Starting from scratch is just deleting the refs: `git for-each-ref --format='%(refname)' refs/dream | xargs -n1 git update-ref -d`.
+
+Files (in git history at `7d0167c`, under `research/hashbench/`): `space.py` (design grid and agent) · `gitmem.py` (git memory) · `policies.py` · `sim.py` (worlds, replay, dream) · `dream.py` (CLI and protocols) · `results/` (live log, synthetic replicates, fidelity study). Still in the working tree: [dream-eval.rs](../examples/hashbench/dream-eval.rs), the [patch](../examples/hashbench/hashbench-funnel-simd-groups.patch) and the oracle grid [oracle.jsonl](../examples/hashbench/evidence/oracle.jsonl).
+
+**Repository notes.** All work is on branch `dream/main` (from `dream/base`, a snapshot of `hashbench/` at 11:00) in a separate worktree. `hashbench/`'s own working tree and its unborn `master` are untouched, because another session is developing there. Live evaluations were pinned to core 3, and the synthetic and fidelity runs to cores 8–15.
+# Configuration and behavior changes
+
+These changes apply to the current source checkout. The archived hashbench experiments retain their original protocol; their reported results have not been regenerated with these safeguards.
+
+## Default policy, yield model and round extension
+
+`[policies] initial` now defaults to `{ family = "bandit" }` when a configuration does not set it. Configurations that name a family (the earlier templates wrote `refine_best`) behave as before, and so do runs that already deployed a policy.
+
+For a `bandit` policy, dreaming fits the yield model over recorded attempts instead of replaying candidates: `holdout`, `lam`, `candidates`, `mode` and `normalize` are not used, and the policy commit holds a `model` table instead of a replay ranking. `[dream] method = "replay"` restores replay-based selection for every family.
+
+`[explore] extend` defaults to `false`; newly generated templates set it to `true`. With it, `git dream run` adds `budget` proposals to the latest round's tree instead of starting a round, also when that round was killed before promotion, and `--new-round` starts a round. `--extend` does the same for one invocation. The round's policy is first driven through its recorded attempts, so an extended round equals one that ran uninterrupted with the larger budget. If the policy cannot reproduce the recorded attempts (an external policy that is not deterministic), extension fails and nothing is recorded. Root re-measurement happens only when a round starts; confirmation runs at the end of every step.
+
+## Attempts at once
+
+`[explore] parallel` (default 1) and `[explore] evaluations` (default `"alone"`) are new; a configuration without them behaves as before, one attempt at a time, and writes the same commits. `git dream run` and `git dream explore` accept `--parallel N`.
+
+With `parallel` above 1:
+
+- Each attempt in flight uses its own scratch worktree: `.git/dream/wt/<run>` for lane 0, `.git/dream/wt/<run>@<lane>` for the others. Agents and evaluators receive `$DREAM_LANE`.
+- An attempt is committed when it starts, with `Dream-Status: pending` and no score, and its ref is moved to the real commit when it finishes. A round killed mid-flight therefore keeps `pending` attempts; extending the round runs them again, and a new round ignores them. `pending` is a new status: tools that read the trailers, and external policies, will see it.
+- A result that arrived after later attempts had been chosen carries `Dream-Seen: <id>`, the first attempt chosen with that result known. Extension uses it to show the round's policy exactly what it saw at each recorded choice.
+- With `evaluations = "alone"` (the default) nothing else runs during an evaluation: attempts go in waves. For a parameter-space agent this leaves nothing to overlap, so `parallel` is ignored unless `evaluations = "parallel"`.
+- An extended round no longer equals an uninterrupted one in general: a step's budget ends a wave early, so later attempts are chosen with different information. With `parallel = 1` the equality holds as before.
+- `evaluate.reuse` does not stop two identical designs that are in flight together from both being measured.
+- Confirmation re-measurements run at once only with `evaluations = "parallel"`.
+
+While dreaming, replay candidates are scored on all cores. The ranking is identical to the single-threaded one.
+
+An external policy that exits without reading its request is now reported with what it printed (`policy stopped reading requests …; it replied "…"`) instead of, depending on timing, a broken-pipe error.
+
+## Policy selection and replay
+
+`[dream] holdout` now defaults to `1`: the newest round of each run is reserved for a deployment check, with a separate measurement cache. The training winner must improve held-out J without increasing the miss rate. Insufficient history keeps the incumbent. Set `holdout = 0` explicitly to use the earlier unguarded selection rule.
+
+`git dream replay --holdout N` reports training and held-out diagnostics for the supplied policies. It does not deploy a policy. `git dream dream --dry-run` reports the training ranking and deployment decision without writing a policy commit. Repeated use of the moving holdout does not provide an unbiased estimate of performance on unseen tasks; see [validation](validation.md).
+
+`[explore] min_calls` defaults to `0` for existing configurations. Newly generated space/command templates set it to `5`/`2`, respectively. If a policy stops before the floor, best-node refinement supplies more proposals. The floor must not exceed the configured or command-line budget. A floor equal to the budget enforces equal proposal counts, not equal wall time or total evaluator cost.
+
+Replay and continued exploration check recorded agent/evaluator configurations and base commits. Changing the objective, operator, or evaluation settings requires a separate run. For independent comparisons, use a fresh run name and `history = "run"`. `--no-dream` freezes the current policy of a run; it does not reset an already adapted run to its initial policy.
+
+## Measurement and evaluator accounting
+
+`budget` counts proposals, including failures and no-ops. Root evaluations and confirmation measurements are additional work. `status` reports evaluator executions separately, excluding reused scores and no-ops.
+
+With `confirm_top > 0`, confirmation includes the incumbent root as well as the selected candidate designs. Selection uses fresh repetitions only; the original selection measurement is excluded. A failed repetition disqualifies the candidate. If every finalist fails, promotion returns an error. Confirmation output and means are preserved in Git notes, and the next root inherits the confirmed mean unless remeasurement is enabled.
+
+`evaluate.reuse` survives reopening a run. `remeasure_root = true` takes precedence over reuse for root measurements. Changed evaluation settings cannot be mixed into an existing run.
+
+For command agents, `evaluate.protected = ["bench.sh", "tests"]` rejects attempts that change the listed paths relative to the base commit. The rejected attempt is still recorded. This catches direct edits to the evaluation contract; it does not isolate code execution.
+
+## Interrupted runs
+
+A run killed mid-round (timeout, Ctrl-C, reboot) can be continued: `run` and `explore` first close the interrupted round by promoting the best of the attempts it recorded, then start the next round. That round's tree has fewer calls than its budget, and replay treats the missing proposals as missing data. If no attempt of the interrupted round was scored, the run stops with an error instead; start a new run after fixing the evaluator. Earlier versions failed with "round N has no promoted attempt". Two processes must still not run the same run at the same time.
+
+## External policies and invalid inputs
+
+External policies have a per-request/reply deadline, configured by `timeout` in their `[policies.external.NAME]` table (default: 10 seconds). Invalid replies, unknown node IDs, closed output, and deadline failures return an error instead of being scored as an inexpensive stopping decision. Timeout cleanup terminates the policy process group. Replies are limited to 1 MiB.
+
+Zero exploration budgets, invalid timeout/probability values, empty external-policy grids, and unsupported history/normalization settings are rejected. Scripts that relied on silently accepted invalid values must correct their configuration.
+
+Existing attempts are retained when an operation fails. A failed or interrupted round can remain incomplete; automatic recovery of incomplete rounds is outside these changes. Inspect its refs and notes before deciding how to continue.
+//! Configuration, the live world (real agent + evaluator + git commits) and the
+//! round loop: `[dream ->] explore -> promote`, repeated.
+
+use crate::agents::{excerpt, failure, note_output, sh, Agent, CommandAgent, EvalResult, Evaluator, SpaceAgent};
+use crate::memory::{check_run, Memory};
+use crate::model;
+use crate::policies::{Param, Policy, Registry};
+use crate::rng::hash;
+use crate::sim::{self, DreamArgs, Mode, ReplayResult};
+use crate::tree::{Goal, Node, Tree, FAIL, NOOP, OK, PENDING};
+use anyhow::{anyhow, bail, Context, Result};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+pub const CONFIG_NAME: &str = ".git-dream.toml";
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    pub run: String,
+    pub agent: AgentCfg,
+    pub evaluate: EvalCfg,
+    pub explore: ExploreCfg,
+    pub dream: DreamCfg,
+    pub policies: PoliciesCfg,
+    pub storage: StorageCfg,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config { run: "main".into(), agent: AgentCfg::default(), evaluate: EvalCfg::default(), explore: ExploreCfg::default(), dream: DreamCfg::default(), policies: PoliciesCfg::default(), storage: StorageCfg::default() }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentCfg {
+    pub kind: String,
+    // space
+    pub knobs: toml::Table,
+    pub start: toml::Table,
+    pub salt: String,
+    pub file: String,
+    pub p_two: f64,
+    pub p_far: f64,
+    // command
+    pub command: String,
+    pub prompt: String,
+    pub timeout: f64,
+}
+
+impl Default for AgentCfg {
+    fn default() -> Self {
+        AgentCfg { kind: "space".into(), knobs: toml::Table::new(), start: toml::Table::new(), salt: String::new(), file: ".dream/params.json".into(), p_two: 0.3, p_far: 0.2, command: String::new(), prompt: String::new(), timeout: 1800.0 }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct EvalCfg {
+    /// Paths a command agent may not change (evaluator, tests, fixtures).
+    pub protected: Vec<String>,
+    pub command: String,
+    pub goal: Goal,
+    pub timeout: f64,
+    /// Never re-measure a design already measured in this run.
+    pub reuse: bool,
+    /// Re-measure each round's root (noisy benchmarks, machine drift).
+    pub remeasure_root: bool,
+    /// Re-measure the top-k designs `confirm_reps` times before promoting.
+    pub confirm_top: usize,
+    pub confirm_reps: usize,
+}
+
+impl Default for EvalCfg {
+    fn default() -> Self {
+        EvalCfg { protected: vec![], command: String::new(), goal: Goal::Min, timeout: 600.0, reuse: false, remeasure_root: false, confirm_top: 0, confirm_reps: 1 }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExploreCfg {
+    pub budget: usize,
+    pub min_calls: usize,
+    /// `git dream run` adds `budget` attempts to the current round's tree
+    /// instead of starting a new round from its best attempt. A new round keeps
+    /// only the promoted attempt; an extended round keeps every attempt
+    /// continuable (runners-up, failed attempts worth repairing).
+    pub extend: bool,
+    /// Attempts in flight at once, each in its own worktree. The policy picks
+    /// the next attempt without the results of those still running.
+    pub parallel: usize,
+    /// What may run while an evaluation runs. "alone": nothing (a score that
+    /// depends on machine load: agents work at once, then each result is
+    /// measured by itself). "serial": no other evaluation, but agents may be
+    /// working. "parallel": anything (a score that does not depend on load).
+    pub evaluations: String,
+}
+
+impl Default for ExploreCfg {
+    fn default() -> Self {
+        ExploreCfg { budget: 20, min_calls: 0, extend: false, parallel: 1, evaluations: "alone".into() }
+    }
+}
+
+/// Keeps evaluations as isolated as `[explore] evaluations` asks: agents hold
+/// the lock shared, evaluations hold it exclusively.
+struct Gate {
+    alone: bool,
+    serial: bool,
+    lock: RwLock<()>,
+}
+
+impl Gate {
+    fn new(evaluations: &str) -> Gate {
+        Gate { alone: evaluations == "alone", serial: evaluations != "parallel", lock: RwLock::new(()) }
+    }
+    fn agent(&self) -> Option<RwLockReadGuard<'_, ()>> {
+        self.alone.then(|| self.lock.read().unwrap_or_else(|e| e.into_inner()))
+    }
+    fn evaluation(&self) -> Option<RwLockWriteGuard<'_, ()>> {
+        self.serial.then(|| self.lock.write().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+/// A finished attempt, not yet committed: the node, its git tree and its note.
+type Outcome = (Node, String, Value);
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct DreamCfg {
+    /// Last N rounds per run reserved for a diagnostic deployment gate (0 disables).
+    pub holdout: usize,
+    pub lam: f64,
+    pub candidates: usize,
+    pub mode: String,
+    /// "none" or "root": cached scores relative to each tree's root.
+    pub normalize: String,
+    /// "run" (this run's rounds) or "all" (every run in the repository).
+    pub history: String,
+    /// "auto": a `bandit` policy is refitted from measured outcomes (the yield
+    /// model), any other family is tuned by replay. "replay": always replay.
+    pub method: String,
+}
+
+impl Default for DreamCfg {
+    fn default() -> Self {
+        DreamCfg { holdout: 1, lam: 0.02, candidates: 300, mode: "cache".into(), normalize: "none".into(), history: "run".into(), method: "auto".into() }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct PoliciesCfg {
+    pub initial: toml::Table,
+    pub families: Vec<String>,
+    /// name -> { command, grid, doc }
+    pub external: toml::Table,
+}
+
+impl Default for PoliciesCfg {
+    fn default() -> Self {
+        let mut initial = toml::Table::new();
+        initial.insert("family".into(), toml::Value::String(crate::model::BANDIT.into()));
+        PoliciesCfg { initial, families: vec![], external: toml::Table::new() }
+    }
+}
+
+/// Attempts are written with plumbing (hash-object, commit-tree, update-ref),
+/// which never triggers `git gc --auto`: every version of a file stays a full
+/// loose object until something packs it.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageCfg {
+    /// After each round, pack its loose objects into one pack (`git repack -d`),
+    /// so near-identical attempts are stored as deltas.
+    pub repack: bool,
+    /// Every N rounds also run `git gc` to merge the per-round packs (0 = never).
+    pub gc_every: u32,
+}
+
+impl Default for StorageCfg {
+    fn default() -> Self {
+        StorageCfg { repack: true, gc_every: 10 }
+    }
+}
+
+pub fn load_config(path: &Path) -> Result<(Config, String)> {
+    let raw = std::fs::read_to_string(path).with_context(|| format!("{} not found: run `git dream init` first", path.display()))?;
+    let cfg: Config = toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    Ok((cfg, raw))
+}
+
+fn toml_to_json(v: &toml::Value) -> Value {
+    serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+/// design -> (score, status, sha) measured in this run (evaluate.reuse).
+type Seen = HashMap<String, (Option<f64>, String, String)>;
+
+pub struct Engine {
+    pub mem: Memory,
+    pub cfg: Config,
+    raw_cfg: String,
+    pub run: String,
+    pub agent: Agent,
+    pub registry: Registry,
+    pub goal: Goal,
+    pub quiet: bool,
+    seen: Mutex<Seen>,
+    external_files: Vec<(String, String)>,
+}
+
+impl Engine {
+    pub fn open(cwd: &Path, config: Option<&Path>, run: Option<&str>) -> Result<Engine> {
+        let mem = Memory::open(cwd)?;
+        let path = config.map(PathBuf::from).unwrap_or_else(|| mem.top.join(CONFIG_NAME));
+        let (cfg, raw) = load_config(&path)?;
+        let run = run.map(String::from).unwrap_or_else(|| cfg.run.clone());
+        check_run(&run)?;
+        let a = &cfg.agent;
+        let agent = match a.kind.as_str() {
+            "space" => Agent::Space(SpaceAgent::new(&a.knobs, &a.start, &a.salt, &a.file, a.p_two, a.p_far)?),
+            "command" => {
+                if a.command.is_empty() {
+                    bail!("[agent] kind = \"command\" needs `command`");
+                }
+                Agent::Command(CommandAgent { command: a.command.clone(), prompt: a.prompt.clone(), timeout: a.timeout })
+            }
+            k => bail!("unknown agent kind {k:?} (space | command)"),
+        };
+        Mode::parse(&cfg.dream.mode)?;
+        anyhow::ensure!(cfg.explore.budget > 0, "explore.budget must be positive");
+        anyhow::ensure!(cfg.explore.min_calls <= cfg.explore.budget, "explore.min_calls exceeds budget");
+        anyhow::ensure!(cfg.dream.lam.is_finite() && cfg.dream.lam >= 0.0, "dream.lam must be finite and nonnegative");
+        anyhow::ensure!(["none", "root"].contains(&cfg.dream.normalize.as_str()), "dream.normalize must be none or root");
+        anyhow::ensure!(["run", "all"].contains(&cfg.dream.history.as_str()), "dream.history must be run or all");
+        anyhow::ensure!(["auto", "replay"].contains(&cfg.dream.method.as_str()), "dream.method must be auto or replay");
+        anyhow::ensure!((1..=64).contains(&cfg.explore.parallel), "explore.parallel must be between 1 and 64");
+        anyhow::ensure!(["alone", "serial", "parallel"].contains(&cfg.explore.evaluations.as_str()), "explore.evaluations must be alone, serial or parallel");
+        for timeout in [cfg.agent.timeout, cfg.evaluate.timeout] {
+            anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "timeouts must be finite, positive and below 1e9 seconds");
+        }
+        anyhow::ensure!(cfg.evaluate.confirm_top == 0 || cfg.evaluate.confirm_reps > 0, "confirmation needs confirm_reps > 0");
+        let mut registry = Registry::builtin();
+        let mut external_files = vec![];
+        for (name, v) in &cfg.policies.external {
+            let t = v.as_table().ok_or_else(|| anyhow!("[policies.external.{name}] must be a table"))?;
+            let command = t.get("command").and_then(|c| c.as_str()).ok_or_else(|| anyhow!("[policies.external.{name}] needs `command`"))?;
+            let mut grid = vec![];
+            if let Some(g) = t.get("grid").and_then(|g| g.as_table()) {
+                for (k, vals) in g {
+                    let vals = vals.as_array().ok_or_else(|| anyhow!("grid {name}.{k} must be an array"))?;
+                    anyhow::ensure!(!vals.is_empty(), "grid {name}.{k} must not be empty");
+                    grid.push((k.clone(), vals.iter().map(|x| Param::from_json(&toml_to_json(x))).collect::<Result<Vec<_>>>()?));
+                }
+            }
+            let doc = t.get("doc").and_then(|d| d.as_str()).unwrap_or("external policy");
+            // run relative commands from the repository root
+            registry.add_external_with_timeout(name, &format!("cd {} && {command}", shell_quote(&mem.top.to_string_lossy())), grid, doc, t.get("timeout").and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64))).unwrap_or(10.0))?;
+            if let Some(src) = t.get("source").and_then(|s| s.as_str()) {
+                if let Ok(text) = std::fs::read_to_string(mem.top.join(src)) {
+                    external_files.push((Path::new(src).file_name().unwrap().to_string_lossy().into_owned(), text));
+                }
+            }
+        }
+        let goal = cfg.evaluate.goal;
+        let mut seen = HashMap::new();
+        if cfg.evaluate.reuse {
+            for t in mem.history(&run)? {
+                for n in t.nodes {
+                    if n.status != NOOP {
+                        seen.entry(n.design).or_insert((n.score, n.status, n.sha));
+                    }
+                }
+            }
+        }
+        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: Mutex::new(seen), external_files })
+    }
+
+    fn log(&self, s: &str) {
+        if !self.quiet {
+            println!("{s}");
+        }
+    }
+
+    fn evaluator(&self) -> Result<Evaluator> {
+        if self.cfg.evaluate.command.is_empty() {
+            bail!("[evaluate] needs `command`");
+        }
+        Ok(Evaluator { command: self.cfg.evaluate.command.clone(), timeout: self.cfg.evaluate.timeout })
+    }
+
+    pub fn base(&self) -> Result<String> {
+        self.mem.base(&self.run)
+    }
+
+    /// The scratch worktree of `lane` (attempts running at once each have one).
+    pub fn wt(&self, lane: usize) -> Result<PathBuf> {
+        self.mem.worktree(&self.run, lane)
+    }
+
+    /// How many attempts are in flight at once. A parameter-space agent proposes
+    /// instantly, so its attempts only overlap if evaluations may.
+    pub fn lanes(&self) -> usize {
+        let x = &self.cfg.explore;
+        if self.agent.space().is_some() && x.evaluations != "parallel" { 1 } else { x.parallel.max(1) }
+    }
+
+    fn seen(&self) -> std::sync::MutexGuard<'_, Seen> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn mode(&self) -> Mode {
+        Mode::parse(&self.cfg.dream.mode).unwrap_or(Mode::Cache)
+    }
+
+    fn normalize_root(&self) -> bool {
+        self.cfg.dream.normalize == "root"
+    }
+
+    pub fn evaluate(&self, tree: &str, design: &str, round: u32, nid: usize, reuse: bool) -> Result<EvalResult> {
+        self.evaluate_in(0, tree, design, round, nid, reuse)
+    }
+
+    /// Evaluate `tree` in the worktree of `lane`.
+    pub fn evaluate_in(&self, lane: usize, tree: &str, design: &str, round: u32, nid: usize, reuse: bool) -> Result<EvalResult> {
+        if reuse && self.cfg.evaluate.reuse {
+            if let Some((s, st, sha)) = self.seen().get(design) {
+                return Ok(EvalResult { score: *s, status: st.clone(), note: json!({"score": s, "status": st, "reused": sha}) });
+            }
+        }
+        let wt = self.wt(lane)?;
+        self.mem.materialize(&wt, tree)?;
+        let mut env = vec![
+            ("DREAM_RUN".to_string(), self.run.clone()),
+            ("DREAM_ROUND".into(), round.to_string()),
+            ("DREAM_NODE".into(), nid.to_string()),
+            ("DREAM_DESIGN".into(), design.to_string()),
+            ("DREAM_WORKTREE".into(), wt.to_string_lossy().into_owned()),
+            ("DREAM_LANE".into(), lane.to_string()),
+        ];
+        env.extend(self.agent.env(design));
+        self.evaluator()?.run(&wt, &env)
+    }
+
+    pub fn initial_policy(&self) -> Result<Policy> {
+        let mut p = self.registry.make(&toml_to_json(&toml::Value::Table(self.cfg.policies.initial.clone())))?;
+        p.set_min_calls(self.cfg.explore.min_calls);
+        Ok(p)
+    }
+
+    pub fn deployed(&self, round: Option<u32>) -> Result<Option<Policy>> {
+        match self.mem.policy_doc(&self.run, round) {
+            Some(doc) => {
+                let mut p = self.registry.make(&doc["policy"])?;
+                p.set_min_calls(self.cfg.explore.min_calls);
+                Ok(Some(p))
+            },
+            None => Ok(None),
+        }
+    }
+
+    pub fn current_policy(&self) -> Result<Policy> {
+        Ok(match self.deployed(None)? {
+            Some(p) => p,
+            None => self.initial_policy()?,
+        })
+    }
+
+    fn policy_files(&self) -> Vec<(String, String)> {
+        let mut f = vec![("git-dream.toml".to_string(), self.raw_cfg.clone())];
+        f.extend(self.external_files.iter().cloned());
+        f
+    }
+
+    pub fn history(&self) -> Result<Vec<Tree>> {
+        if self.cfg.dream.history == "all" {
+            let mut v = vec![];
+            for r in self.mem.runs()? {
+                v.extend(self.mem.history(&r)?);
+            }
+            Ok(v)
+        } else {
+            self.mem.history(&self.run)
+        }
+    }
+
+    /// A design key alone does not identify its objective or proposal operator.
+    /// Reject pooling incompatible experiments instead of silently reusing scores.
+    pub fn replay_history(&self) -> Result<Vec<Tree>> {
+        let hist = self.history()?;
+        let base = self.mem.rev(&format!("refs/dream/{}/base", self.run)).or_else(|| self.mem.rev("HEAD^{commit}"));
+        for t in &hist {
+            let path = format!("refs/tags/dream/{}/policy-r{:02}:git-dream.toml", t.run, t.round);
+            let raw = self.mem.git(&["show", &path]).with_context(|| format!("cannot verify experiment configuration for {} r{}", t.run, t.round))?;
+            let recorded: Config = toml::from_str(&raw)?;
+            anyhow::ensure!(recorded.agent == self.cfg.agent && recorded.evaluate == self.cfg.evaluate,
+                "incompatible agent/evaluator configuration in {} r{}; use a separate run and history = run", t.run, t.round);
+            anyhow::ensure!(self.mem.rev(&format!("refs/dream/{}/base", t.run)) == base,
+                "cannot replay runs with different base commits ({})", t.run);
+        }
+        Ok(hist)
+    }
+
+    pub fn next_round(&self) -> Result<u32> {
+        Ok(self.mem.rounds(&self.run)?.last().map_or(1, |r| r + 1))
+    }
+
+    // ---- dreaming ------------------------------------------------------------------
+    /// Replay the deployed policy and sampled alternatives over recorded history
+    /// (zero new evaluations) and, if `commit`, deploy the best for `round`.
+    pub fn dream(&self, round: Option<u32>, candidates: Option<usize>, mode: Option<Mode>, budget: Option<usize>, commit: bool) -> Result<Vec<(Policy, ReplayResult)>> {
+        let round = match round {
+            Some(r) => r,
+            None => self.next_round()?,
+        };
+        let hist = self.replay_history()?;
+        let current = self.current_policy()?;
+        if hist.is_empty() {
+            self.log(&format!("dream: no history yet, keeping {}", current.repr()));
+            return Ok(vec![]);
+        }
+        if self.cfg.dream.method != "replay" {
+            if let Some((best, y)) = model::learn(&current, &hist) {
+                return self.dream_model(round, &hist, &current, &best, &y, commit);
+            }
+        }
+        let budget = budget.unwrap_or(self.cfg.explore.budget);
+        let mode = mode.unwrap_or(self.mode());
+        let eff = if self.agent.space().is_some() { mode } else { Mode::Strict };
+        let partition = if self.cfg.dream.holdout > 0 { sim::split_history(&hist, self.cfg.dream.holdout).ok() } else { None };
+        let training = partition.as_ref().map_or(hist.as_slice(), |(train, _)| train.as_slice());
+        let fams = self.registry.searchable(&self.cfg.policies.families);
+        let a = DreamArgs {
+            history: training,
+            budget,
+            lam: self.cfg.dream.lam,
+            candidates: candidates.unwrap_or(self.cfg.dream.candidates),
+            min_calls: self.cfg.explore.min_calls,
+            seed: hash(&format!("{}|{round}", self.run)),
+            agent: self.agent.space(),
+            mode: eff,
+            normalize_root: self.normalize_root(),
+            registry: &self.registry,
+            families: &fams,
+            threads: crate::par::threads(),
+        };
+        let ranking = sim::dream(&current, &[], &a)?;
+        let (candidate, top) = (&ranking[0].0, &ranking[0].1);
+        let (accepted, validation) = if let Some((_, test)) = &partition {
+            let replay = |p| sim::replay(p, test, budget, self.cfg.dream.lam, self.agent.space(), eff, self.normalize_root(), false);
+            let proposed = replay(candidate)?;
+            let incumbent = replay(&current)?;
+            (proposed.j > incumbent.j && proposed.miss_rate <= incumbent.miss_rate, json!({
+                "candidate_J": proposed.j, "current_J": incumbent.j,
+                "candidate_miss_rate": proposed.miss_rate, "current_miss_rate": incumbent.miss_rate,
+                "rounds": test.iter().map(|t| json!({"run": t.run, "round": t.round})).collect::<Vec<_>>(),
+                "caveat": "diagnostic gate only; repeated use and behavior-policy selection prevent an unbiased generalization estimate"
+            }))
+        } else { (self.cfg.dream.holdout == 0, json!({"reason": "held-out gate disabled or insufficient history"})) };
+        let best = if accepted { candidate } else { &current };
+        self.log(&format!("held-out deployment gate: {} ({validation})", if accepted { "accepted" } else { "keeping incumbent" }));
+        let cur = &ranking.iter().find(|(c, _)| c.repr() == current.repr()).unwrap().1;
+        self.log(&format!("dream r{round}: {} policies over {} trees ({}); current J={:.4}, best J={:.4} -> {}", ranking.len(), hist.len(), eff.as_str(), cur.j, top.j, best.repr()));
+        if commit {
+            let doc = json!({
+                "run": self.run, "round": round, "policy": best.spec(), "repr": best.repr(),
+                "validation": validation, "accepted": accepted, "candidate": candidate.spec(),
+                "why": format!("dreamt over {} recorded trees, {} candidate policies, {} replay", hist.len(), ranking.len(), eff.as_str()),
+                "dream": {"J": if accepted { top.j } else { cur.j }, "candidate_J": top.j, "gain": if accepted { top.gain } else { cur.gain }, "calls": if accepted { top.calls } else { cur.calls }, "miss_rate": if accepted { top.miss_rate } else { cur.miss_rate }, "J_current": cur.j, "current": current.repr(),
+                          "mode": eff.as_str(), "lam": self.cfg.dream.lam, "budget": budget, "trees": hist.len(), "candidates": ranking.len()},
+                "top": ranking.iter().take(10).map(|(c, r)| json!({"policy": c.repr(), "spec": c.spec(), "J": r.j, "gain": r.gain, "calls": r.calls, "miss_rate": r.miss_rate})).collect::<Vec<_>>(),
+            });
+            self.mem.commit_policy(&self.run, round, &doc, &self.policy_files())?;
+        }
+        Ok(ranking)
+    }
+
+    /// Dreaming for a `bandit` policy: no candidate is scored on outcomes that
+    /// were never observed. The policy for `round` carries the yield of each
+    /// kind of move, measured over every recorded attempt.
+    fn dream_model(&self, round: u32, hist: &[Tree], current: &Policy, best: &Policy, y: &model::Yield, commit: bool) -> Result<Vec<(Policy, ReplayResult)>> {
+        let m = current.p("m", model::STRENGTH);
+        let attempts: usize = hist.iter().map(Tree::calls).sum();
+        self.log(&format!("dream r{round}: yield model over {attempts} recorded attempts in {} rounds (weight halves every {} attempts)", hist.len(), fs(Some(current.p("halflife", model::HALFLIFE)))));
+        let mut table = vec![];
+        for b in 0..model::NB {
+            if y.n[b] <= 0.0 {
+                continue;
+            }
+            let (a, c) = y.posterior(b, m);
+            let (lo, hi) = model::interval(a, c, 0.9);
+            self.log(&format!("  {:6} {:52} weight {:6.1}  new best {:5.1}%  (90% interval {:.1}-{:.1}%, prior {:.1}%)", model::name(b), model::describe(b), y.n[b], 100.0 * a / (a + c), 100.0 * lo, 100.0 * hi, 100.0 * model::prior(b)));
+            table.push(json!({"move": model::name(b), "what": model::describe(b), "weight": y.n[b], "credit": y.s[b], "yield": a / (a + c), "interval90": [lo, hi], "prior": model::prior(b)}));
+        }
+        if commit {
+            let doc = json!({
+                "run": self.run, "round": round, "policy": best.spec(), "repr": best.repr(), "method": "model",
+                "why": format!("yield model fitted over {attempts} recorded attempts in {} rounds: measured outcomes only, no replay of unobserved decisions", hist.len()),
+                "model": table,
+            });
+            self.mem.commit_policy(&self.run, round, &doc, &self.policy_files())?;
+        }
+        Ok(vec![])
+    }
+
+    pub fn replay(&self, policy: &Policy, mode: Option<Mode>, budget: Option<usize>) -> Result<ReplayResult> {
+        let hist = self.replay_history()?;
+        sim::replay(policy, &hist, budget.unwrap_or(self.cfg.explore.budget), self.cfg.dream.lam, self.agent.space(), mode.unwrap_or(self.mode()), self.normalize_root(), true)
+    }
+
+    // ---- exploring -------------------------------------------------------------------
+    fn policy_for(&self, round: u32) -> Result<Policy> {
+        if let Some(p) = self.deployed(Some(round))? {
+            return Ok(p);
+        }
+        let p = self.current_policy()?;
+        let why = if round == 1 { "initial policy" } else { "carried over (no dream before this round)" };
+        self.mem.commit_policy(&self.run, round, &json!({"run": self.run, "round": round, "policy": p.spec(), "repr": p.repr(), "why": why}), &self.policy_files())?;
+        Ok(p)
+    }
+
+    fn params_file(&self, s: &SpaceAgent, design: &str) -> Vec<(String, String)> {
+        vec![(s.file.clone(), serde_json::to_string_pretty(&s.params_json(design)).unwrap() + "\n")]
+    }
+
+    fn make_root(&self, round: u32, budget: usize, policy: &Policy) -> Result<Node> {
+        let base = self.base()?;
+        let mut t = Tree::new(&self.run, round, budget, self.goal, &policy.repr());
+        let (parent, tree, design, change, res) = if round == 1 {
+            let (tree, design) = match &self.agent {
+                Agent::Space(s) => (self.mem.tree_with_files(Some(&base), &self.params_file(s, &s.root()))?, s.root()),
+                Agent::Command(_) => {
+                    let tr = self.mem.tree_of(&base)?;
+                    (tr.clone(), tr)
+                }
+            };
+            (base, tree, design, "base".to_string(), None)
+        } else {
+            let prev_ref = format!("refs/dream/{}/r{:02}/best", self.run, round - 1);
+            let parent = self.mem.rev(&prev_ref).ok_or_else(|| anyhow!("round {} has no promoted attempt", round - 1))?;
+            let prev = self.mem.load_tree(&self.run, round - 1)?.ok_or_else(|| anyhow!("round {} not found", round - 1))?;
+            let pn = prev.nodes.iter().find(|n| n.sha == parent).ok_or_else(|| anyhow!("promoted attempt of round {} not in its tree", round - 1))?.clone();
+            let score = self.mem.read_note(&parent).and_then(|n| n["confirmation"]["score"].as_f64()).or(pn.score);
+            let res = if self.cfg.evaluate.remeasure_root { None } else { Some(EvalResult { score, status: pn.status.clone(), note: json!({"score": score, "status": pn.status, "copied_from": parent}) }) };
+            (parent.clone(), self.mem.tree_of(&parent)?, pn.design.clone(), format!("from r{:02} n{:03}", round - 1, pn.id), res)
+        };
+        let res = match res {
+            Some(r) => r,
+            None => self.evaluate(&tree, &design, round, 0, !self.cfg.evaluate.remeasure_root)?,
+        };
+        let mut root = Node::new(0, None, None, design, res.score, &res.status, change);
+        t.set_root(root.clone());
+        root.sha = self.mem.commit_attempt(&t, &root, &tree, &parent, Some(&res.note))?;
+        if root.score.is_none() {
+            bail!("the root of round {round} did not evaluate ({}):\n{}", root.status, note_output(&res.note));
+        }
+        self.seen().insert(root.design.clone(), (root.score, root.status.clone(), root.sha.clone()));
+        Ok(root)
+    }
+
+    pub fn explore(&self, round: Option<u32>, budget: Option<usize>) -> Result<Tree> {
+        let round = match round {
+            Some(r) => r,
+            None => {
+                self.resume()?;
+                self.next_round()?
+            }
+        };
+        if round > 1 { self.replay_history()?; }
+        let budget = budget.unwrap_or(self.cfg.explore.budget);
+        anyhow::ensure!(budget > 0 && budget >= self.cfg.explore.min_calls, "budget must be positive and at least explore.min_calls");
+        let mut policy = self.policy_for(round)?;
+        self.log(&format!("explore r{round}: {}, budget {budget}{}", policy.repr(), self.lanes_note()));
+        let root = self.make_root(round, budget, &policy)?;
+        self.log(&format!("  r{round} n000 root {} {}", short(&root.design, 24), fs(root.score)));
+        let mut t = Tree::new(&self.run, round, budget, self.goal, &policy.repr());
+        t.set_root(root);
+        policy.reset(round as u64);
+        self.search(&mut policy, &mut t, VecDeque::new())?;
+        let best = self.promote(&t)?;
+        self.log(&format!("  r{round}: {} calls, promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), best.id, fs(best.score), best.score.zip(t.root().score).map_or(0.0, |(b, r)| t.rel(b, r) * 100.0), &best.sha[..10]));
+        self.compact(round);
+        Ok(t)
+    }
+
+    /// Add `budget` attempts to the latest round's tree. The round's policy is
+    /// driven through the recorded attempts first (zero evaluations), so it is
+    /// in exactly the state it would be in had the round never stopped, then
+    /// continues live. Every recorded attempt stays continuable: nothing is
+    /// lost at a round boundary. Also finishes a round that was killed
+    /// (attempts that were running when it died are run again).
+    pub fn extend(&self, budget: Option<usize>) -> Result<Tree> {
+        let Some(&round) = self.mem.rounds(&self.run)?.last() else { return self.explore(Some(1), budget) };
+        self.replay_history()?;
+        let rec = self.mem.load_tree(&self.run, round)?.ok_or_else(|| anyhow!("round {round} not found"))?;
+        let add = budget.unwrap_or(self.cfg.explore.budget);
+        anyhow::ensure!(add > 0, "budget must be positive");
+        let total = rec.calls() + add;
+        let mut policy = self.policy_for(round)?;
+        self.log(&format!("extend r{round}: {}, {} recorded attempts + {add}{}", policy.repr(), rec.calls(), self.lanes_note()));
+        let recorded = rec.nodes.len();
+        let (mut t, unfinished) = self.redrive(&mut policy, &rec, total)?;
+        self.search(&mut policy, &mut t, unfinished)?;
+        let best = self.promote(&t)?;
+        self.log(&format!("  r{round}: {} calls ({} new), promoted n{:03} {} ({:+.2}% vs root)  {}", t.calls(), t.nodes.len() - recorded, best.id, fs(best.score), best.score.zip(t.root().score).map_or(0.0, |(b, r)| t.rel(b, r) * 100.0), &best.sha[..10]));
+        self.compact(round);
+        Ok(t)
+    }
+
+    /// `n` steps of search: new rounds, or extensions of the current round
+    /// when `extend` is set (then only `new_round` starts a round, after dreaming).
+    #[allow(clippy::too_many_arguments)]
+    pub fn run(&self, n: usize, dream: bool, budget: Option<usize>, candidates: Option<usize>, mode: Option<Mode>, extend: bool, new_round: bool) -> Result<Vec<Tree>> {
+        if !extend {
+            return self.rounds(n, dream, budget, candidates, mode);
+        }
+        let mut out = vec![];
+        for i in 0..n {
+            if i == 0 && new_round && !self.mem.rounds(&self.run)?.is_empty() {
+                out.extend(self.rounds(1, dream, budget, candidates, mode)?);
+            } else {
+                out.push(self.extend(budget)?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn lanes_note(&self) -> String {
+        match self.lanes() {
+            1 => String::new(),
+            n => format!(", {n} attempts at once (evaluations: {})", self.cfg.explore.evaluations),
+        }
+    }
+
+    /// Rebuild the tree of a recorded round by driving its policy through the
+    /// recorded attempts, showing it at each step exactly what it saw then:
+    /// attempts whose results had not arrived yet are pending. Returns the tree
+    /// and the attempts that never finished (the round was killed).
+    fn redrive(&self, policy: &mut Policy, rec: &Tree, total: usize) -> Result<(Tree, VecDeque<usize>)> {
+        let mut t = Tree::new(&self.run, rec.round, total, self.goal, &policy.repr());
+        let mut root = rec.root().clone();
+        root.n_exp = 0;
+        t.set_root(root);
+        policy.reset(rec.round as u64);
+        let finished = |j: usize| rec.nodes[j].status != PENDING;
+        let mut shown = vec![false; rec.nodes.len()];
+        for i in 1..=rec.nodes.len() {
+            for (j, shown) in shown.iter_mut().enumerate().take(i).skip(1) {
+                if !*shown && finished(j) && (i == rec.nodes.len() || rec.nodes[j].visible() <= i) {
+                    *shown = true;
+                    t.resolve(rec.nodes[j].clone());
+                }
+            }
+            let Some(r) = rec.nodes.get(i) else { break };
+            let again = "start a new round instead (git dream run --new-round)";
+            let Some(p) = policy.select(&t)? else { bail!("the policy of round {} stops before reproducing its {} recorded attempts; {again}", rec.round, rec.calls()) };
+            if Some(p) != r.parent || Some(t.nodes[p].n_exp) != r.k {
+                bail!("the policy of round {} no longer reproduces its recorded attempts (it diverges at attempt {i}); {again}", rec.round);
+            }
+            t.nodes[p].n_exp += 1;
+            let mut n = Node::pending(i, p, r.k.unwrap());
+            n.sha = r.sha.clone();
+            t.add(n);
+        }
+        Ok((t, (1..rec.nodes.len()).filter(|&j| !finished(j)).collect()))
+    }
+
+    /// Run the policy on `t` until it stops or the tree's budget is spent, with
+    /// up to [`Engine::lanes`] attempts in flight. `unfinished` attempts (already
+    /// in `t`, pending) are run first.
+    ///
+    /// This thread chooses attempts and writes every commit, ref and note; an
+    /// attempt's own thread runs the agent and the evaluator in the worktree of
+    /// its lane. When evaluations must run alone, attempts go in waves: all
+    /// lanes are chosen together once nothing is running. Otherwise a lane is
+    /// refilled as soon as it is free. After an error nothing new is started,
+    /// and the attempts still running are recorded before the error is returned.
+    fn search(&self, policy: &mut Policy, t: &mut Tree, mut unfinished: VecDeque<usize>) -> Result<()> {
+        let lanes = self.lanes();
+        for lane in 0..lanes {
+            self.wt(lane)?;
+        }
+        let base_tree = self.mem.tree_of(&self.base()?)?;
+        let gate = Gate::new(&self.cfg.explore.evaluations);
+        let (tx, rx) = mpsc::channel::<(usize, Result<Outcome>)>();
+        let mut free: Vec<usize> = (0..lanes).rev().collect();
+        let mut flying = 0;
+        let mut failed: Option<anyhow::Error> = None;
+        std::thread::scope(|s| loop {
+            if failed.is_none() && (flying == 0 || !gate.alone) {
+                let mut batch = vec![];
+                while batch.len() < free.len() {
+                    match self.start(policy, t, &mut unfinished, lanes) {
+                        Ok(Some(id)) => batch.push(id),
+                        Ok(None) => break,
+                        Err(e) => {
+                            failed = Some(e);
+                            break;
+                        }
+                    }
+                }
+                // what each of them is told: the tree with all of them started
+                let view = Arc::new(t.clone());
+                for id in batch {
+                    let lane = free.pop().unwrap();
+                    flying += 1;
+                    let (tx, view, gate, base_tree) = (tx.clone(), view.clone(), &gate, &base_tree);
+                    s.spawn(move || {
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.attempt(gate, lane, &view, id, base_tree)));
+                        let _ = tx.send((lane, r.unwrap_or_else(|_| Err(anyhow!("attempt n{id:03} panicked")))));
+                    });
+                }
+            }
+            if flying == 0 {
+                break;
+            }
+            let (lane, outcome) = rx.recv().expect("this thread holds a sender");
+            flying -= 1;
+            free.push(lane);
+            if let Err(e) = outcome.and_then(|o| self.record(t, o)) {
+                failed.get_or_insert(e);
+            }
+        });
+        failed.map_or(Ok(()), Err)
+    }
+
+    /// The next attempt to start, added to `t` as pending: one that never
+    /// finished, else the policy's pick. None: budget spent, or the policy has
+    /// nothing to continue (yet).
+    fn start(&self, policy: &mut Policy, t: &mut Tree, unfinished: &mut VecDeque<usize>, lanes: usize) -> Result<Option<usize>> {
+        if let Some(id) = unfinished.pop_front() {
+            return Ok(Some(id));
+        }
+        if t.calls() >= t.budget {
+            return Ok(None);
+        }
+        let Some(p) = policy.select(t)? else { return Ok(None) };
+        anyhow::ensure!(t.nodes[p].status != PENDING, "the policy continued attempt n{p:03}, which is still running");
+        let k = t.nodes[p].n_exp;
+        t.nodes[p].n_exp += 1;
+        let mut n = Node::pending(t.nodes.len(), p, k);
+        if lanes > 1 {
+            // Recorded before it runs, so git always holds every attempt that was
+            // started: a killed round has no gaps and its policy can be driven through it again.
+            n.sha = self.mem.commit_attempt(t, &n, &self.mem.tree_of(&t.nodes[p].sha)?, &t.nodes[p].sha, None)?;
+        }
+        let id = n.id;
+        t.add(n);
+        Ok(Some(id))
+    }
+
+    /// Commit a finished attempt and put its result into the tree.
+    fn record(&self, t: &mut Tree, (mut n, tree, note): Outcome) -> Result<()> {
+        let parent_sha = t.nodes[n.parent.unwrap()].sha.clone();
+        // attempts chosen from now on know this result
+        n.seen = t.nodes.len();
+        n.sha = self.mem.commit_attempt(t, &n, &tree, &parent_sha, Some(&note))?;
+        if n.status != NOOP {
+            self.seen().entry(n.design.clone()).or_insert((n.score, n.status.clone(), n.sha.clone()));
+        }
+        if !self.quiet {
+            print_attempt(t, &n);
+        }
+        t.resolve(n);
+        Ok(())
+    }
+
+    /// One attempt, in the worktree of `lane`: run the agent on the parent,
+    /// evaluate what it made. `t` is the tree as it was when the attempt started.
+    fn attempt(&self, gate: &Gate, lane: usize, t: &Tree, nid: usize, base_tree: &str) -> Result<Outcome> {
+        let (parent, k) = (t.nodes[nid].parent.unwrap(), t.nodes[nid].k.unwrap());
+        let p = &t.nodes[parent];
+        let (tree, design, change, parent_tree, agent_note) = match &self.agent {
+            Agent::Space(s) => {
+                let (design, change) = s.propose(&p.design, k);
+                (self.mem.tree_with_files(Some(base_tree), &self.params_file(s, &design))?, design, change, None, None)
+            }
+            Agent::Command(c) => {
+                let pt = self.mem.tree_of(&p.sha)?;
+                let _working = gate.agent();
+                let (tree, msg, note) = run_agent(self, c, lane, t, parent, k, &pt)?;
+                (tree.clone(), tree, msg, Some(pt), Some(note))
+            }
+        };
+        let mut n = Node::new(nid, Some(parent), Some(k), design.clone(), None, OK, change);
+        let protected_changed = if parent_tree.is_some() && !self.cfg.evaluate.protected.is_empty() {
+            let mut args = vec!["diff", "--name-only", base_tree, tree.as_str(), "--"];
+            args.extend(self.cfg.evaluate.protected.iter().map(String::as_str));
+            self.mem.git(&args)?
+        } else { String::new() };
+        let mut note = if !protected_changed.is_empty() {
+            n.status = FAIL.into();
+            json!({"status": FAIL, "exit": "protected paths changed", "stderr": protected_changed})
+        } else if parent_tree.as_deref() == Some(tree.as_str()) {
+            n.status = NOOP.into();
+            json!({"status": NOOP})
+        } else {
+            let _isolated = gate.evaluation();
+            let r = self.evaluate_in(lane, &tree, &design, t.round, nid, true)?;
+            n.score = r.score;
+            n.status = if r.score.is_none() && r.status == OK { FAIL.into() } else { r.status };
+            r.note
+        };
+        if let Some(a) = agent_note {
+            note["agent"] = a;
+        }
+        Ok((n, tree, note))
+    }
+
+    /// Pack the round's loose objects (and every `gc_every` rounds run git gc).
+    /// The round is already recorded, so a failure here is only a warning.
+    fn compact(&self, round: u32) {
+        let s = &self.cfg.storage;
+        let r = if s.gc_every > 0 && round.is_multiple_of(s.gc_every) {
+            self.log(&format!("  r{round}: git gc"));
+            self.mem.gc()
+        } else if s.repack {
+            self.mem.repack()
+        } else {
+            return;
+        };
+        if let Err(e) = r {
+            eprintln!("git dream: warning: packing objects after round {round} failed: {e:#}");
+        }
+    }
+
+    /// Pick the round's best attempt. With evaluate.confirm_top = k, the top k
+    /// designs are re-measured `confirm_reps` times first (guards against
+    /// promoting a lucky noisy measurement: the winner's curse).
+    fn promote(&self, t: &Tree) -> Result<Node> {
+        let mut best = t.best().ok_or_else(|| anyhow!("round has no valid attempt"))?.clone();
+        let k = self.cfg.evaluate.confirm_top;
+        if k > 0 && t.nodes.iter().filter(|n| n.score.is_some()).count() > 1 {
+            let mut valid: Vec<&Node> = t.nodes.iter().filter(|n| n.score.is_some()).collect();
+            valid.sort_by(|a, b| t.cost(a.score.unwrap()).total_cmp(&t.cost(b.score.unwrap())));
+            let mut top: Vec<&Node> = vec![];
+            for n in valid {
+                if top.len() < k && !top.iter().any(|x| x.design == n.design) {
+                    top.push(n);
+                }
+            }
+            if !top.iter().any(|n| n.design == t.root().design) { top.push(t.root()); }
+            // Every re-measurement is independent: they run at once when evaluations may.
+            let reps = self.cfg.evaluate.confirm_reps;
+            let mut jobs = vec![];
+            for n in &top {
+                let tree = self.mem.tree_of(&n.sha)?;
+                jobs.extend((0..reps).map(|_| (*n, tree.clone())));
+            }
+            let lanes = if self.cfg.explore.evaluations == "parallel" { self.lanes().min(jobs.len()) } else { 1 };
+            for lane in 0..lanes {
+                self.wt(lane)?;
+            }
+            let measure = |lane: usize, (n, tree): &(&Node, String)| self.evaluate_in(lane, tree, &n.design, t.round, n.id, false);
+            let mut measured = if lanes > 1 {
+                crate::par::map(lanes, &jobs, measure)
+            } else {
+                // one at a time: stop at the first evaluation that cannot run at all
+                let mut v: Vec<Result<EvalResult>> = vec![];
+                for j in &jobs {
+                    v.push(measure(0, j));
+                    if v.last().unwrap().is_err() {
+                        break;
+                    }
+                }
+                v
+            }
+            .into_iter();
+            let mut means = vec![];
+            for n in &top {
+                let mut vals = vec![];
+                let mut results = vec![];
+                for res in measured.by_ref().take(reps) {
+                    let res = res?;
+                    vals.push(res.score);
+                    results.push(res.note);
+                }
+                let m = if vals.iter().all(Option::is_some) { Some(vals.iter().flatten().sum::<f64>() / vals.len() as f64) } else { None };
+                let mut note = self.mem.read_note(&n.sha).unwrap_or(json!({}));
+                note["confirm"] = json!(vals);
+                note["confirmation"] = json!({"score": m, "evaluations": results});
+                self.mem.note(&n.sha, &note)?;
+                means.push(m);
+            }
+            let i = (0..top.len()).filter(|&i| means[i].is_some()).min_by(|&a, &b| t.cost(means[a].unwrap()).total_cmp(&t.cost(means[b].unwrap())))
+                .ok_or_else(|| anyhow!("all confirmation candidates failed; no attempt promoted"))?;
+            best = top[i].clone();
+            best.score = means[i];
+            self.log(&format!("  r{} confirm: {}", t.round, top.iter().zip(&means).map(|(n, m)| format!("n{:03} {}", n.id, fs(*m))).collect::<Vec<_>>().join(", ")));
+        }
+        self.mem.set_ref(&format!("refs/dream/{}/r{:02}/best", self.run, t.round), &best.sha)?;
+        self.mem.set_ref(&format!("refs/heads/dream/{}/best", self.run), &best.sha)?;
+        Ok(best)
+    }
+
+    /// A run killed mid-round (timeout, Ctrl-C, reboot) leaves recorded attempts
+    /// but no promoted one, and the next round would have no parent. Close such a
+    /// round by promoting from the attempts it recorded: they cost real evaluations,
+    /// so they are kept. Its tree simply has fewer calls than its budget.
+    pub fn resume(&self) -> Result<()> {
+        let Some(&last) = self.mem.rounds(&self.run)?.last() else { return Ok(()) };
+        if self.mem.rev(&format!("refs/dream/{}/r{last:02}/best", self.run)).is_some() {
+            return Ok(());
+        }
+        let t = self.mem.load_tree(&self.run, last)?.ok_or_else(|| anyhow!("round {last} not found"))?;
+        anyhow::ensure!(t.nodes.iter().any(|n| n.score.is_some()),
+            "round {last} of run {:?} was interrupted before any attempt was scored; fix the evaluator, then use a new --run (or `git dream clean --run {} --yes`)", self.run, self.run);
+        let best = self.promote(&t)?;
+        self.log(&format!("  r{last}: interrupted after {} calls; resumed by promoting n{:03} {} from its recorded attempts", t.calls(), best.id, fs(best.score)));
+        self.compact(last);
+        Ok(())
+    }
+
+    pub fn rounds(&self, n: usize, dream: bool, budget: Option<usize>, candidates: Option<usize>, mode: Option<Mode>) -> Result<Vec<Tree>> {
+        self.resume()?;
+        let mut out = vec![];
+        for _ in 0..n {
+            let r = self.next_round()?;
+            if dream && r > 1 {
+                self.dream(Some(r), candidates, mode, budget, true)?;
+            }
+            out.push(self.explore(Some(r), budget)?);
+        }
+        Ok(out)
+    }
+}
+
+fn print_attempt(t: &Tree, n: &Node) {
+    let b = t.best().and_then(|b| b.score);
+    let best = match (b, n.score) {
+        (Some(b), Some(s)) if t.cost(s) < t.cost(b) => Some(s),
+        (None, s) => s,
+        (b, _) => b,
+    };
+    println!("  r{} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", t.round, n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
+}
+
+/// Where, inside the scratch worktree, git-dream puts the files it hands a
+/// command agent (the history, the proposal to write). Inside the worktree so a
+/// sandboxed agent may use them; removed before the attempt is snapshotted, so
+/// they never enter a commit.
+pub const AGENT_DIR: &str = ".dream-agent";
+const HISTORY_FILE: &str = "history.md";
+const MESSAGE_FILE: &str = "message.md";
+
+fn run_agent(e: &Engine, c: &CommandAgent, lane: usize, t: &Tree, parent: usize, k: usize, parent_tree: &str) -> Result<(String, String, Value)> {
+    let wt = e.wt(lane)?;
+    e.mem.materialize(&wt, parent_tree)?;
+    let dir = wt.join(AGENT_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let ctx = dir.join(HISTORY_FILE);
+    let msgf = dir.join(MESSAGE_FILE);
+    // The same history dreaming replays (`[dream] history`), read from git, plus
+    // this round in progress: other runs first, then this run's earlier rounds.
+    let mut earlier: Vec<Tree> = e.history()?.into_iter().filter(|h| h.run != e.run || h.round < t.round).collect();
+    earlier.sort_by_key(|h| h.run == e.run);
+    let trees: Vec<&Tree> = earlier.iter().chain([t]).collect();
+    let failed: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != OK && n.status != NOOP && n.status != PENDING).map(|n| n.sha.as_str()).collect();
+    let notes = e.mem.notes_of(&failed)?;
+    std::fs::write(&ctx, history_context(&trees, parent, k, &notes))?;
+    let context = agent_context(t, parent, k);
+    let p = &t.nodes[parent];
+    let env = vec![
+        ("DREAM_RUN".to_string(), e.run.clone()),
+        ("DREAM_ROUND".into(), t.round.to_string()),
+        ("DREAM_PARENT".into(), p.sha.clone()),
+        ("DREAM_PARENT_SCORE".into(), p.score.map_or(String::new(), |s| format!("{s:?}"))),
+        ("DREAM_K".into(), k.to_string()),
+        ("DREAM_GOAL".into(), t.goal.as_str().into()),
+        ("DREAM_CONTEXT".into(), ctx.to_string_lossy().into_owned()),
+        ("DREAM_MESSAGE_FILE".into(), msgf.to_string_lossy().into_owned()),
+        ("DREAM_PROMPT".into(), format!("{}\n\n{context}", c.prompt.trim()).trim().to_string()),
+        ("DREAM_WORKTREE".into(), wt.to_string_lossy().into_owned()),
+        ("DREAM_LANE".into(), lane.to_string()),
+    ];
+    let r = sh(&c.command, &wt, &env, c.timeout)?;
+    let msg = std::fs::read_to_string(&msgf).map(|s| s.trim().to_string()).unwrap_or_default();
+    let msg = if msg.is_empty() { format!("agent change (k={k})") } else { msg };
+    std::fs::remove_dir_all(&dir)?;
+    let tree = e.mem.snapshot(&wt)?;
+    Ok((tree, msg, json!({"exit": r.exit_json(), "seconds": (r.seconds * 1000.0).round() / 1000.0, "stdout": excerpt(&r.stdout, 10, 20), "stderr": excerpt(&r.stderr, 10, 20)})))
+}
+
+/// The prompt's search context for a command agent: where it is, and how to use
+/// the full history (the exploration procedure of Dream-RSI, appendix B.1).
+pub fn agent_context(t: &Tree, parent: usize, k: usize) -> String {
+    let p = &t.nodes[parent];
+    let better = if t.goal == Goal::Min { "lower" } else { "higher" };
+    let mut s = format!("# git-dream: continue attempt n{:03} (continuation #{}), round {}\n\nScore: {better} is better. Current attempt score: {} ({}).\n\n## Path from the round's root to this attempt\n", p.id, k + 1, t.round, fs(p.score), p.status);
+    let mut path = vec![p];
+    while let Some(q) = path.last().unwrap().parent {
+        path.push(&t.nodes[q]);
+    }
+    for a in path.iter().rev() {
+        s += &format!("- n{:03} {} {}: {}\n", a.id, a.status, fs(a.score), short(summary(&a.change), 200));
+    }
+    // this attempt itself is in the tree already, as a pending continuation #k
+    let kids: Vec<&Node> = t.children(p.id).into_iter().filter(|c| c.k != Some(k)).collect();
+    let (running, tried): (Vec<&Node>, Vec<&Node>) = kids.into_iter().partition(|c| c.status == PENDING);
+    if !tried.is_empty() {
+        s += "\n## Already tried from this attempt\n";
+        for c in tried {
+            s += &format!("- n{:03} {} {}: {}\n", c.id, c.status, fs(c.score), short(summary(&c.change), 200));
+        }
+    }
+    if !running.is_empty() {
+        s += &format!(
+            "\n## Being tried from this attempt right now\n\n{} other agent{} started from this same attempt at the same time as you and cannot see your work. \
+             The obvious next step is the one they will most likely take: prefer a change they are unlikely to make.\n",
+            running.len(),
+            if running.len() == 1 { "" } else { "s" }
+        );
+    }
+    if let Some(b) = t.best() {
+        if b.id != p.id {
+            s += &format!("\nBest attempt this round: n{:03} {}: {}\n", b.id, fs(b.score), short(summary(&b.change), 200));
+        }
+    }
+    let (h, m) = (format!("{AGENT_DIR}/{HISTORY_FILE}"), format!("{AGENT_DIR}/{MESSAGE_FILE}"));
+    s + &format!(
+        "
+## How to work
+
+1. Before you change anything, read the whole search history in `{h}`: every attempt of every round, not only this branch. It holds each attempt's write-up, its measured result and, for failures, the evaluator's output.
+2. Trust measured results over what a write-up claims. For each failure, decide whether the idea was wrong or only its implementation (a bug, a bad parameter). Don't repeat a wrong idea. Retry a badly implemented one only after you have found the fault in its code (`git show <commit>`) and have a specific fix.
+3. If most attempts are small variations of one idea with shrinking gains, prefer a structurally different idea or an untried combination over another small tweak.
+4. Make one change, and make it new: not a repeat or a rename of an earlier attempt.
+5. Write your proposal to `{m}`: a one-line summary, a blank line, then the idea, the evidence from the history behind it, and why it is not a repeat. Don't claim results; the evaluator measures them. Leave the rest of `{AGENT_DIR}/` alone: it is removed before your change is committed.
+"
+    )
+}
+
+/// The complete search history handed to a command agent (`$DREAM_CONTEXT`):
+/// every attempt of every round so far (`trees`, the last one in progress;
+/// with `[dream] history = "all"` also the other runs' rounds, listed first),
+/// with its write-up, its measured result and, for failures, the evaluator's
+/// output from the attempt's note. Raw evidence, not a summary: in Dream-RSI
+/// (§5.1, Fig. 5), distilled "directional insights" made the search worse.
+pub fn history_context(trees: &[&Tree], parent: usize, k: usize, notes: &HashMap<String, Value>) -> String {
+    let Some(cur) = trees.last() else { return String::new() };
+    let better = if cur.goal == Goal::Min { "lower" } else { "higher" };
+    let mut others: Vec<&str> = trees.iter().map(|t| t.run.as_str()).filter(|r| *r != cur.run).collect();
+    others.dedup();
+    let multi = !others.is_empty();
+    // Attempt labels: "r02" within one run, "<run> r02" once other runs are included.
+    let label = |t: &Tree| if multi { format!("{} r{:02}", t.run, t.round) } else { format!("r{:02}", t.round) };
+    let mut s = format!(
+        "# Search history: run {}\n\nScore: {better} is better; failed attempts have no score. You are continuing {} n{:03} (continuation #{}).\n\n\
+         Every attempt is a git commit. `git show <commit>` shows what it changed relative to the attempt it continued; `git diff <a> <b>` compares two attempts. \
+         The write-ups are the agents' own words, written before evaluation. Status, score and evaluator output are measured.\n",
+        cur.run,
+        label(cur),
+        parent,
+        k + 1
+    );
+    if multi {
+        s += &format!(
+            "\nThis history also holds the other run{} {} in this repository, listed first. Runs search separately and may have started from different code: \
+             compare scores within a run, and use `git diff` to see how another run's code differs from yours.\n",
+            if others.len() == 1 { "" } else { "s" },
+            others.iter().map(|r| format!("`{r}`")).collect::<Vec<_>>().join(", ")
+        );
+    }
+    for t in trees {
+        let best = t.best().map_or(String::new(), |b| format!(", best n{:03} {}", b.id, fs(b.score)));
+        let run = if multi { format!("Run {}, round", t.run) } else { "Round".into() };
+        // attempts without a result yet (running now, or cut off when a run was killed) have nothing to show
+        let done = t.nodes.iter().skip(1).filter(|n| n.status != PENDING).count();
+        // (the reader's own attempt is one of them: it is not "more")
+        let own = usize::from(std::ptr::eq(*t, *cur) && t.nodes.iter().any(|n| n.status == PENDING && n.parent == Some(parent) && n.k == Some(k)));
+        let running = t.calls() - done - own;
+        let more = if running > 0 { format!(", {running} more without a result yet") } else { String::new() };
+        s += &format!("\n## {run} {} ({done} attempt{}{best}{more})\n", t.round, if done == 1 { "" } else { "s" });
+        for n in t.nodes.iter().filter(|n| n.status != PENDING) {
+            let note = notes.get(&n.sha);
+            let result = match n.status.as_str() {
+                OK => format!("ok {}", fs(n.score)),
+                NOOP => "noop (the agent changed nothing)".into(),
+                st => match note {
+                    Some(v) if v.get("reused").is_some() => format!("{st} (same code as {}, not re-run)", short(v["reused"].as_str().unwrap_or(""), 10)),
+                    Some(v) => failure(v).map_or(st.to_string(), |f| format!("{st} ({f})")),
+                    None => st.to_string(),
+                },
+            };
+            let from = n.parent.map_or("root".to_string(), |p| format!("continues n{p:03}"));
+            let here = if t.run == cur.run && t.round == cur.round && n.id == parent { " · **you are continuing this attempt**" } else { "" };
+            s += &format!("\n### {} n{:03} · {from} · {result} · {}{here}\n", label(t), n.id, &n.sha[..n.sha.len().min(10)]);
+            let w = n.change.trim();
+            if !w.is_empty() {
+                s += "\n";
+                for l in w.lines() {
+                    s += &format!("> {l}\n").replace("> \n", ">\n");
+                }
+            }
+            if n.status != OK && n.status != NOOP {
+                let out = note.map(note_output).unwrap_or_default();
+                if !out.is_empty() {
+                    s += &format!("\nEvaluator output:\n\n````text\n{out}\n````\n");
+                }
+            }
+        }
+    }
+    s
+}
+
+/// The first line of an attempt's write-up.
+pub fn summary(change: &str) -> &str {
+    change.trim().lines().next().unwrap_or("")
+}
+
+pub fn fs(x: Option<f64>) -> String {
+    match x {
+        None => "-".into(),
+        Some(v) => {
+            let a = v.abs();
+            if a != 0.0 && !(1e-4..1e7).contains(&a) {
+                format!("{v:.4e}")
+            } else {
+                let digits = if a >= 1.0 { (6 - (a.log10().floor() as i32 + 1)).max(0) } else { 6 } as usize;
+                let s = format!("{v:.digits$}");
+                if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
+            }
+        }
+    }
+}
+
+pub fn short(s: &str, n: usize) -> String {
+    let s = s.replace('\n', " ");
+    if s.chars().count() <= n {
+        s
+    } else {
+        s.chars().take(n - 1).collect::<String>() + "…"
+    }
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}

@@ -1,0 +1,145 @@
+
+=== history recorded by: fixed  (100 histories)
+    incumbent pi_0 percentile in the pool (true J, same roots): 47%
+    headroom, best policy in pool minus pi_0:  same roots +0.1794 ± 0.0242   next root +0.1176 ± 0.0312
+    a random policy minus pi_0:                same roots +0.0074 ± 0.0107   next root +0.0092 ± 0.0120
+  -- strict replay: miss rate 47%, 10% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.0274 ± 0.0444   in support +0.1194 ± 0.0795
+     |replay J - true J|:        in support +0.0461 ± 0.0052   out of support +0.0663 ± 0.0081
+     charged  pick - pi_0, same roots: -0.0031 ± 0.0086   W/T/L 40/44/16
+     charged  pick - pi_0, next root : +0.0000 ± 0.0052   W/T/L 47/46/7   captures +0% of headroom -> no better than keeping pi_0
+              switched in 56/100; pick's percentile 52%
+     free     pick - pi_0, same roots: +0.0063 ± 0.0124   W/T/L 50/25/25
+     free     pick - pi_0, next root : +0.0045 ± 0.0094   W/T/L 47/43/10   captures +4% of headroom -> no better than keeping pi_0
+              switched in 76/100; pick's percentile 54%
+     gated    pick - pi_0, same roots: -0.0055 ± 0.0084   W/T/L 30/54/16
+     gated    pick - pi_0, next root : -0.0003 ± 0.0051   W/T/L 37/57/6   captures -0% of headroom -> no better than keeping pi_0
+              switched in 46/100; pick's percentile 51%
+  -- cache replay: miss rate 21%, 20% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.1798 ± 0.0534   in support +0.2568 ± 0.0733
+     |replay J - true J|:        in support +0.0438 ± 0.0045   out of support +0.0626 ± 0.0088
+     charged  pick - pi_0, same roots: +0.0200 ± 0.0139   W/T/L 57/21/22
+     charged  pick - pi_0, next root : +0.0017 ± 0.0099   W/T/L 56/26/18   captures +1% of headroom -> no better than keeping pi_0
+              switched in 79/100; pick's percentile 59%
+     free     pick - pi_0, same roots: +0.0268 ± 0.0145   W/T/L 62/16/22
+     free     pick - pi_0, next root : +0.0038 ± 0.0123   W/T/L 57/23/20   captures +3% of headroom -> no better than keeping pi_0
+              switched in 84/100; pick's percentile 60%
+     gated    pick - pi_0, same roots: -0.0016 ± 0.0087   W/T/L 35/50/15
+     gated    pick - pi_0, next root : -0.0002 ± 0.0052   W/T/L 41/52/7   captures -0% of headroom -> no better than keeping pi_0
+              switched in 50/100; pick's percentile 53%
+
+=== history recorded by: dream  (100 histories)
+    incumbent pi_0 percentile in the pool (true J, same roots): 45%
+    headroom, best policy in pool minus pi_0:  same roots +0.2050 ± 0.0311   next root +0.1537 ± 0.0379
+    a random policy minus pi_0:                same roots +0.0124 ± 0.0136   next root +0.0070 ± 0.0158
+  -- strict replay: miss rate 48%, 5% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.0483 ± 0.0425   in support +0.1301 ± 0.1249
+     |replay J - true J|:        in support +0.0372 ± 0.0045   out of support +0.0675 ± 0.0083
+     charged  pick - pi_0, same roots: +0.0006 ± 0.0146   W/T/L 54/15/31
+     charged  pick - pi_0, next root : -0.0069 ± 0.0176   W/T/L 58/17/25   captures -5% of headroom -> no better than keeping pi_0
+              switched in 85/100; pick's percentile 53%
+     free     pick - pi_0, same roots: +0.0270 ± 0.0180   W/T/L 57/16/27
+     free     pick - pi_0, next root : +0.0159 ± 0.0204   W/T/L 54/26/20   captures +10% of headroom -> no better than keeping pi_0
+              switched in 88/100; pick's percentile 55%
+     gated    pick - pi_0, same roots: +0.0006 ± 0.0146   W/T/L 54/15/31
+     gated    pick - pi_0, next root : -0.0069 ± 0.0176   W/T/L 58/17/25   captures -4% of headroom -> no better than keeping pi_0
+              switched in 85/100; pick's percentile 53%
+  -- cache replay: miss rate 22%, 18% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.1617 ± 0.0443   in support +0.2424 ± 0.0803
+     |replay J - true J|:        in support +0.0414 ± 0.0047   out of support +0.0665 ± 0.0092
+     charged  pick - pi_0, same roots: +0.0132 ± 0.0165   W/T/L 61/7/32
+     charged  pick - pi_0, next root : -0.0160 ± 0.0131   W/T/L 59/10/31   captures -10% of headroom -> WORSE than keeping pi_0
+              switched in 93/100; pick's percentile 61%
+     free     pick - pi_0, same roots: +0.0328 ± 0.0219   W/T/L 68/5/27
+     free     pick - pi_0, next root : +0.0040 ± 0.0227   W/T/L 62/10/28   captures +3% of headroom -> no better than keeping pi_0
+              switched in 97/100; pick's percentile 64%
+     gated    pick - pi_0, same roots: +0.0075 ± 0.0180   W/T/L 56/12/32
+     gated    pick - pi_0, next root : -0.0125 ± 0.0197   W/T/L 58/13/29   captures -8% of headroom -> no better than keeping pi_0
+              switched in 88/100; pick's percentile 58%
+
+=== history recorded by: wide-softmax  (100 histories)
+    incumbent pi_0 percentile in the pool (true J, same roots): 51%
+    headroom, best policy in pool minus pi_0:  same roots +0.1530 ± 0.0249   next root +0.0620 ± 0.0227
+    a random policy minus pi_0:                same roots -0.0018 ± 0.0102   next root -0.0029 ± 0.0079
+  -- strict replay: miss rate 32%, 6% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.2370 ± 0.0450   in support +0.2749 ± 0.1239
+     |replay J - true J|:        in support +0.0289 ± 0.0034   out of support +0.0455 ± 0.0044
+     charged  pick - pi_0, same roots: +0.0304 ± 0.0152   W/T/L 65/0/35
+     charged  pick - pi_0, next root : -0.0003 ± 0.0127   W/T/L 58/10/32   captures -1% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 68%
+     free     pick - pi_0, same roots: +0.0332 ± 0.0154   W/T/L 66/1/33
+     free     pick - pi_0, next root : -0.0010 ± 0.0130   W/T/L 57/11/32   captures -2% of headroom -> no better than keeping pi_0
+              switched in 99/100; pick's percentile 69%
+     gated    pick - pi_0, same roots: +0.0304 ± 0.0152   W/T/L 65/0/35
+     gated    pick - pi_0, next root : -0.0003 ± 0.0127   W/T/L 58/10/32   captures -1% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 68%
+  -- cache replay: miss rate 11%, 35% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.3656 ± 0.0469   in support +0.4680 ± 0.0571
+     |replay J - true J|:        in support +0.0284 ± 0.0031   out of support +0.0488 ± 0.0055
+     charged  pick - pi_0, same roots: +0.0520 ± 0.0161   W/T/L 75/0/25
+     charged  pick - pi_0, next root : +0.0058 ± 0.0132   W/T/L 64/10/26   captures +9% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 76%
+     free     pick - pi_0, same roots: +0.0583 ± 0.0183   W/T/L 76/0/24
+     free     pick - pi_0, next root : +0.0071 ± 0.0137   W/T/L 63/11/26   captures +12% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 78%
+     gated    pick - pi_0, same roots: +0.0500 ± 0.0160   W/T/L 74/0/26
+     gated    pick - pi_0, next root : +0.0050 ± 0.0131   W/T/L 65/9/26   captures +8% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 75%
+
+=== history recorded by: wide-ucb  (100 histories)
+    incumbent pi_0 percentile in the pool (true J, same roots): 41%
+    headroom, best policy in pool minus pi_0:  same roots +0.3109 ± 0.0470   next root +0.2289 ± 0.0530
+    a random policy minus pi_0:                same roots +0.0289 ± 0.0155   next root +0.0167 ± 0.0145
+  -- strict replay: miss rate 38%, 10% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.1048 ± 0.0479   in support +0.3187 ± 0.1297
+     |replay J - true J|:        in support +0.0238 ± 0.0038   out of support +0.0776 ± 0.0107
+     charged  pick - pi_0, same roots: -0.0070 ± 0.0182   W/T/L 53/4/43
+     charged  pick - pi_0, next root : -0.0111 ± 0.0170   W/T/L 54/14/32   captures -5% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 44%
+     free     pick - pi_0, same roots: +0.0229 ± 0.0259   W/T/L 57/3/40
+     free     pick - pi_0, next root : -0.0023 ± 0.0184   W/T/L 52/17/31   captures -1% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 49%
+     gated    pick - pi_0, same roots: -0.0070 ± 0.0182   W/T/L 53/4/43
+     gated    pick - pi_0, next root : -0.0111 ± 0.0170   W/T/L 54/14/32   captures -5% of headroom -> no better than keeping pi_0
+              switched in 100/100; pick's percentile 44%
+  -- cache replay: miss rate 17%, 28% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.2594 ± 0.0484   in support +0.3867 ± 0.0709
+     |replay J - true J|:        in support +0.0284 ± 0.0040   out of support +0.0820 ± 0.0119
+     charged  pick - pi_0, same roots: +0.0699 ± 0.0307   W/T/L 75/1/24
+     charged  pick - pi_0, next root : +0.0026 ± 0.0189   W/T/L 65/8/27   captures +1% of headroom -> no better than keeping pi_0
+              switched in 99/100; pick's percentile 64%
+     free     pick - pi_0, same roots: +0.0767 ± 0.0325   W/T/L 75/3/22
+     free     pick - pi_0, next root : +0.0138 ± 0.0248   W/T/L 63/11/26   captures +6% of headroom -> no better than keeping pi_0
+              switched in 99/100; pick's percentile 65%
+     gated    pick - pi_0, same roots: +0.0703 ± 0.0307   W/T/L 76/1/23
+     gated    pick - pi_0, next root : +0.0027 ± 0.0189   W/T/L 65/8/27   captures +1% of headroom -> no better than keeping pi_0
+              switched in 99/100; pick's percentile 64%
+
+=== history recorded by: wide-beam  (100 histories)
+    incumbent pi_0 percentile in the pool (true J, same roots): 51%
+    headroom, best policy in pool minus pi_0:  same roots +0.2009 ± 0.0348   next root +0.1019 ± 0.0350
+    a random policy minus pi_0:                same roots -0.0098 ± 0.0152   next root -0.0302 ± 0.0165
+  -- strict replay: miss rate 32%, 17% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.1282 ± 0.0464   in support +0.4335 ± 0.0754
+     |replay J - true J|:        in support +0.0196 ± 0.0024   out of support +0.0540 ± 0.0057
+     charged  pick - pi_0, same roots: -0.0008 ± 0.0198   W/T/L 58/2/40
+     charged  pick - pi_0, next root : -0.0383 ± 0.0194   W/T/L 46/9/45   captures -38% of headroom -> WORSE than keeping pi_0
+              switched in 100/100; pick's percentile 62%
+     free     pick - pi_0, same roots: +0.0041 ± 0.0168   W/T/L 60/2/38
+     free     pick - pi_0, next root : -0.0338 ± 0.0161   W/T/L 43/14/43   captures -33% of headroom -> WORSE than keeping pi_0
+              switched in 100/100; pick's percentile 58%
+     gated    pick - pi_0, same roots: -0.0008 ± 0.0198   W/T/L 58/2/40
+     gated    pick - pi_0, next root : -0.0383 ± 0.0194   W/T/L 46/9/45   captures -38% of headroom -> WORSE than keeping pi_0
+              switched in 100/100; pick's percentile 62%
+  -- cache replay: miss rate 14%, 39% of the pool in support (miss <= 5%)
+     Spearman(replay J, true J): pool +0.3006 ± 0.0389   in support +0.5033 ± 0.0517
+     |replay J - true J|:        in support +0.0244 ± 0.0025   out of support +0.0583 ± 0.0083
+     charged  pick - pi_0, same roots: +0.0312 ± 0.0271   W/T/L 64/1/35
+     charged  pick - pi_0, next root : -0.0408 ± 0.0191   W/T/L 49/6/45   captures -40% of headroom -> WORSE than keeping pi_0
+              switched in 100/100; pick's percentile 69%
+     free     pick - pi_0, same roots: +0.0482 ± 0.0250   W/T/L 67/1/32
+     free     pick - pi_0, next root : -0.0259 ± 0.0170   W/T/L 51/7/42   captures -25% of headroom -> WORSE than keeping pi_0
+              switched in 100/100; pick's percentile 72%
+     gated    pick - pi_0, same roots: +0.0312 ± 0.0271   W/T/L 64/1/35
+     gated    pick - pi_0, next root : -0.0408 ± 0.0191   W/T/L 49/6/45   captures -40% of headroom -> WORSE than keeping pi_0
+              switched in 100/100; pick's percentile 69%
