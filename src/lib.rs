@@ -1,4 +1,6 @@
-//! git-dream: Git-native experimental search with replay diagnostics.
+//! git-dream: a search that gets better at how it searches without paying for
+//! more evaluations (Dream-RSI), built from git's own tooling: attempts and
+//! policies are commits, searches are refs, checkouts are worktrees.
 //!
 //! * [`tree`]     discovery trees (what a round produces, what policies see)
 //! * [`policies`] exploration policies (built-in families + external commands)

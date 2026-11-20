@@ -377,6 +377,11 @@ pub fn note_output(note: &Value) -> String {
     }
 }
 
+/// `s` as one word of a `sh` command.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// The last non-empty stdout line: a number, or a JSON object with "score"
 /// (and optionally "status" and anything else, kept as metrics).
 pub fn parse_score(stdout: &str) -> (Option<f64>, Option<Map<String, Value>>) {
