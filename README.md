@@ -2,7 +2,7 @@
 
 **Git-native experimental search for coding agents.** Preserve every attempt, inspect failures, reproduce evaluations, and compare exploration strategies using Git history.
 
-Use a fixed agent to propose changes and a fixed evaluator to score them. git-dream records the search as commits, keeps your checkout separate, and decides which attempt to continue next. Its default policy learns that from measured outcomes only.
+Use a fixed agent to propose changes and a fixed evaluator to score them. git-dream records the search as commits, keeps your checkout separate, and decides which attempt to continue next. That decision is the *exploration policy*, and it is the part that improves.
 
 > **Goal:** a search that gets better at *how it searches*, without paying for more evaluations (the goal of the Dream-RSI paper, below), while using existing tooling from git instead of re-implementing it.
 
@@ -12,22 +12,38 @@ Use a fixed agent to propose changes and a fixed evaluator to score them. git-dr
 - a fixed **evaluator** scores them;
 - an **exploration policy**, which is ordinary code, decides which attempt to continue next and when to stop.
 
-In the paper, candidate policies are **dreamt** after each round: replayed offline over the recorded attempts at zero evaluation cost, and the best one is deployed. git-dream still offers that (see [Policies](#policies)), but its own evidence is that replay cannot tell whether a different policy would have done better: history only answers that where the candidate repeats what was recorded.
+In the paper the policy improves between rounds, and no evaluation is spent on it. Candidate policies are **dreamt**: replayed offline over the recorded attempts, and the best one is deployed. A **policy-development agent** writes new policy code from the same record.
 
-So the default works differently:
+git-dream builds each of those parts from something git already does:
 
-- **The `bandit` policy learns which kind of move pays.** Every attempt is a move of some type: continue the best attempt, a runner-up, a lower-ranked or a failed one, for the first or the n-th time. The policy keeps the measured rate at which each type produced a new best, and continues the attempt whose type currently looks most productive.
-- **Dreaming fits that table from history** (the *yield model*). Every number in it is an average over attempts that were really evaluated, so nothing is extrapolated. `git dream dream --dry-run` prints it with intervals.
-- **A round can be extended** instead of restarted, so runners-up and failed attempts stay continuable. On the two benchmarks here this matters more than anything else.
+| Dream-RSI | git-dream | git |
+|---|---|---|
+| the record of every attempt | one commit per attempt, the outcome in its trailers, the evaluator's output in a note | commits, trailers, notes, hidden refs |
+| where an attempt is made | a scratch checkout per attempt in flight | `git worktree` |
+| the policy, as versioned code | a branch whose tree *is* the policy: one commit per version, one tag per round | branch, tags |
+| the policy-development agent | a second search, of the policy's tree: each candidate policy is a commit, scored by replay | the same commits, refs and worktrees |
+| deploying a policy | a commit on the policy branch with the winning candidate as its second parent | a merge commit |
+| looking at a search | `git dream show` is `git log --graph`; attempts are compared with `git show` and `git diff` | |
+| sharing and storing a search | the refs are pushed, fetched and bundled; git packs them | `git push`, `git fetch`, `git bundle`, `git maintenance` |
+
+Three things improve the policy, none of which evaluates anything (see [Policies](#policies)):
+
+- **The default `bandit` policy learns which kind of move pays.** Every attempt is a move of some type: continue the best attempt, a runner-up, a lower-ranked or a failed one, for the first or the n-th time. The policy keeps the measured rate at which each type produced a new best, and continues the attempt whose type currently looks most productive.
+- **Dreaming fits that table from history** (the *yield model*). Every number in it is an average over attempts that were really evaluated, so nothing is extrapolated. `git dream dream --dry-run` prints it with intervals. With `[dream] history = "all"` it is fitted over every run in the repository, so a new run starts from what the earlier ones measured.
+- **A policy-development agent rewrites the policy** (`[develop]`, off until you name an agent). It edits the policy's parameters or writes a program; each candidate is scored by replay over the recorded attempts, and the winner is deployed only if it also does better on rounds it was not scored on.
+
+One caution, from git-dream's own evidence: replay cannot tell whether a different policy would have done better. History only answers that where the candidate repeats what was recorded. That is why the default policy learns from measured outcomes instead of replay, and why a replay winner has to pass a held-out check. See [Does it work?](#does-it-work).
+
+A round can also be **extended** instead of restarted, so runners-up and failed attempts stay continuable. On the two benchmarks here this matters more than anything else.
 
 git-dream is a single Rust binary that works in **any git repository**. The agent can be a deterministic parameter-search operator, or any program that edits code, such as an LLM coding agent. Everything is stored as ordinary git objects under `refs/dream/*`. It creates `dream/*` branches and refs while leaving your checked-out branch and files alone.
 
 ```
-           ┌─────────────────── round r ───────────────────┐
- history ─▶│ dream: fit the yield model (0 evaluations)    │─▶ policy r ─▶ explore: agent + evaluator
-  (git)    └───────────────────────────────────────────────┘               (one commit per attempt)
-    ▲                                                                                 │
-    └───────────────────── remember: refs/dream/<run>/rNN/nNNN ◀──────────────────────┘
+           ┌──────────────────────── round r ────────────────────────┐
+ history ─▶│ dream (0 evaluations): fit the yield model,             │─▶ policy r ─▶ explore: agent + evaluator
+  (git)    │ and let the policy-development agent rewrite the policy │   (a commit)  (one commit per attempt)
+    ▲      └─────────────────────────────────────────────────────────┘                        │
+    └───────────────────────── remember: refs/dream/<run>/rNN/nNNN ◀──────────────────────────┘
 ```
 
 ## Install
@@ -187,17 +203,22 @@ Work that never depends on your setup is always done on every core: scoring repl
 | discovery tree | hidden refs `refs/dream/<run>/rNN/nNNN` |
 | start of a run | `refs/dream/<run>/base` |
 | best attempt | branch `dream/<run>/best` (per round: `refs/dream/<run>/rNN/best`) |
-| exploration policy | branch `dream/<run>/policy`: one commit per round (`policy.json` with the dream's ranking, the config, external policy sources), tags `dream/<run>/policy-rNN` |
+| exploration policy | branch `dream/<run>/policy`: one commit per version, and its tree is the policy. `policy.json` names a built-in family and its parameters, or the command that starts a program kept next to it. `dream.json` says how the version was chosen (yield table, replay ranking, held-out check), `git-dream.toml` is the configuration it ran under. Tags `dream/<run>/policy-rNN` mark the version each round used |
+| candidate policies | the run `<run>.policy`, with the same layout as any run: `refs/dream/<run>.policy/rNN/nNNN`, one commit per candidate, its replay score in the trailers. A deployed candidate is the second parent of its policy commit |
 
-Attempts are written with plumbing commands (`hash-object`, `commit-tree`, `update-ref`), which never trigger git's automatic `gc`. Left alone, every attempt would keep a full compressed copy of each file it changed. So after each round git-dream runs `git repack -d`, which packs that round's attempts into one pack, storing near-identical versions as deltas, and every `gc_every` rounds it runs `git gc` to merge those packs:
+Attempts are written with plumbing commands (`hash-object`, `commit-tree`, `update-ref`), which never trigger git's housekeeping. So after each round git-dream runs `git maintenance run --auto`, and git packs the attempts when its own thresholds are reached, as it does after ordinary commits. Tune it with git's settings (`gc.auto`, `maintenance.*`), not git-dream's.
 
-```toml
-[storage]
-repack = true      # default
-gc_every = 10      # default; 0 = never
+Because all of it is commits and refs, git's own commands read a search:
+
+```bash
+git dream show                                             # = git log --graph over the round's refs
+git log --first-parent -p dream/main/policy -- policy.json # how the policy changed, version by version
+git diff dream/main/policy-r02 dream/main/policy-r03       # two rounds' policies
+git show refs/dream/main/r01/n007                          # one attempt: write-up, outcome, change
+git notes --ref=dream show refs/dream/main/r01/n007        # what the evaluator printed for it
 ```
 
-The trees are rebuilt from commit trailers before every dream, so the repository *is* the state. The scratch worktrees are outside the repository, in `~/.cache/git-dream/<repository>/` (or under `$GIT_DREAM_WORKTREES`, `$XDG_CACHE_HOME`, `%LOCALAPPDATA%`), and can be deleted at any time; `.git/dream/` holds only temporary files. They are not under `.git` because coding agents refuse to edit files there: Claude Code treats every path below `.git` as a sensitive file, so an agent placed in `.git/dream/wt` could read the code and not change it. Hidden refs aren't pushed by default; `git dream push [remote]` / `git dream fetch [remote]` share runs.
+The trees are rebuilt from commit trailers before every dream, so the repository *is* the state. The scratch worktrees are outside the repository, in `~/.cache/git-dream/<repository>/` (or under `$GIT_DREAM_WORKTREES`, `$XDG_CACHE_HOME`, `%LOCALAPPDATA%`), and can be deleted at any time; `.git/dream/` holds only temporary files. A policy that is a program runs from one more scratch worktree, checked out from its policy commit. The worktrees are not under `.git` because coding agents refuse to edit files there: Claude Code treats every path below `.git` as a sensitive file, so an agent placed in `.git/dream/wt` could read the code and not change it. Hidden refs aren't pushed by default; `git dream push [remote]` / `git dream fetch [remote]` share runs.
 
 ## Commands
 
@@ -206,16 +227,17 @@ The trees are rebuilt from commit trailers before every dream, so the repository
 | `git dream init [--kind space\|command]` | write a `.git-dream.toml` template |
 | `git dream run -n N [--no-dream] [--budget B] [--parallel P]` | N rounds of dream → explore → promote (`--no-dream` = fixed-policy baseline; `--parallel` = attempts in flight at once) |
 | `git dream run -n N --extend` | N steps of B more attempts in the current round's tree; the default with `[explore] extend = true` (new templates), where `--new-round` starts a round |
-| `git dream explore [--extend]` / `git dream dream [--dry-run]` | the two halves separately |
-| `git dream replay ["family:k=v,..." \| JSON ...] [-v] [--holdout N]` | score policies on recorded history: the tool for developing policies |
-| `git dream status` / `git dream show [ROUND]` | summary of a run / one round's tree |
+| `git dream explore [--extend]` / `git dream dream [--dry-run]` | the two halves separately. `dream` learns from the record and deploys the next policy version; with `[develop]` it also runs the policy-development agent |
+| `git dream replay ["family:k=v,..." \| JSON ...] [-v] [--holdout N]` | score policies on recorded history |
+| `git dream replay --dir DIR` | score the policy in a directory (`policy.json` and its program), exactly as a candidate policy is scored |
+| `git dream status` / `git dream show [ROUND]` | summary of a run / one round's tree, drawn by `git log --graph` (`--run <run>.policy`: the candidate policies) |
 | `git dream policies` | policy families and their search grids |
 | `git dream push` / `fetch [REMOTE]` | share dream refs |
 | `git dream clean --run NAME --yes` | delete a run |
 
-Run-oriented commands take `--run NAME` and `--config FILE`. Runs are independent by default, e.g. `--run baseline --no-dream` against `--run dream`.
+Run-oriented commands take `--run NAME` and `--config FILE`; `git dream -C DIR ...` runs in another directory, like `git -C`. Runs are independent by default, e.g. `--run baseline --no-dream` against `--run dream`.
 
-A run is one discovery process, the paper's history H: what dreaming replays and what each agent reads is that run's rounds. That keeps a comparison fair, since a baseline that reads the other arm's attempts is no longer a baseline. To pool knowledge instead, set `[dream] history = "all"`. Recorded rounds then feed both dreaming and the agents' history file, with each attempt labelled by its run. Replay requires matching agent/evaluator configurations and base commits. It's one setting because the paper has one history. Nothing is copied between runs: the history is read from the runs' refs, and `git show` works across them.
+A run is one discovery process, the paper's history H: what dreaming replays and what each agent reads is that run's rounds. That keeps a comparison fair, since a baseline that reads the other arm's attempts is no longer a baseline. To pool knowledge instead, set `[dream] history = "all"`. Recorded rounds then feed both dreaming and the agents' history file, with each attempt labelled by its run, and a new run dreams before its first round. The yield model learns from any recorded run, because it only counts what each attempt did in its own tree. Replay (and so policy development) requires matching agent/evaluator configurations and base commits. It's one setting because the paper has one history. Nothing is copied between runs: the history is read from the runs' refs, and `git show` works across them.
 
 ## Policies
 
@@ -256,34 +278,69 @@ cargo run --release --locked --example summarize -- results.jsonl
 
 See [the validation protocol and results](docs/validation.md) for independent prospective evaluations, random search, fixed UCB, successive halving, equal allocation, costs, and paired uncertainty intervals.
 
-### Writing new policies (in any language)
+### Policy development: an agent that writes the policy
 
-The paper's real lever is a **policy-development agent** that writes *new* policy code after reading the history. There are two ways to add a family:
-
-1. **In Rust:** add a variant in [src/policies.rs](src/policies.rs) and rebuild.
-2. **As an external program:** git-dream starts it once and asks it one JSON line per decision.
+The paper's stronger lever is a **policy-development agent** that writes *new* policy code after reading the history. In git-dream that agent is configured like the discovery agent, and its work is recorded the same way:
 
 ```toml
-[policies.external.patient]
-command = "./target/release/examples/patient"   # run from the repository root
-source = "policies/patient.rs"                  # optional: snapshot into each policy commit
-timeout = 10                                   # seconds per request/reply (default)
-grid = { p = [3, 5, 8] }                  # non-empty grid => searched while dreaming
+[develop]
+command = 'claude -p "$DREAM_PROMPT" --permission-mode acceptEdits'   # any program that edits files
+attempts = 4          # candidate policies per dream (default 4)
+parallel = 1          # candidates written at once
+timeout = 1800
+prompt = ""           # added to the built-in instructions
 ```
+
+While dreaming (before a new round, or `git dream dream`), git-dream runs a second search in the run `<run>.policy`:
+
+1. **The start is the deployed policy**: the tree of the newest commit on `dream/<run>/policy`, checked out in a scratch worktree.
+2. **Each attempt is a candidate policy.** The agent edits `policy.json` (other parameters, another built-in family) or writes a program and names the command that starts it: `{"command": "python3 policy.py", "params": {...}}`. It is told the protocol below, given every earlier candidate with its score and failure output, and can score its own work before it finishes.
+3. **The score is replay**, J over the recorded rounds, so no evaluation is spent. A policy that cannot be started, or answers with something that is not a node, is a failed attempt with the reason recorded.
+4. **The best candidate is deployed if it passes the held-out check**: it must also beat the deployed policy on the newest round of each run, which it was not scored on (`[dream] holdout`, default 1; with fewer than two recorded rounds development waits). Deployment is a commit on the policy branch whose tree is the candidate's and whose second parent is the candidate.
+
+The next round is then searched by that policy. If it is a program, git-dream checks it out from its commit and starts it there.
+
+```bash
+git dream show --run main.policy          # the candidates of the latest dream, as a tree
+git log --graph --oneline dream/main/policy   # policy versions and the candidates they came from
+git dream replay --dir path/to/a/policy   # score a policy directory by hand
+```
+
+With a `bandit` policy deployed, the yield model is fitted first and the agent starts from the fitted policy. With any other policy the agent replaces sampling parameters from the grids, unless `[dream] method = "replay"` asks for both.
+
+The agent's command needs whatever permission it takes to run the scoring command it is given (`$DREAM_CHECK`, also spelled out in its prompt); without it the agent writes candidates blind and git-dream still scores them. No policy written by an LLM has been measured here yet: what replay rewards is in [Limitations](#limitations).
+
+### The policy protocol (any language)
+
+A policy that is not a built-in family is a program. git-dream starts it once and asks it one JSON line per decision.
 
 Request: `{"params": {"p": 5}, "seed": 3, "tree": {"goal": "min", "budget": 20, "calls": 4, "nodes": [{"id", "parent", "k", "design", "score", "status", "change", "n_exp"}, ...]}}`
 Reply: a node id to continue, or `null` to end the round. The reply must depend only on the request, or replay can't reproduce live rounds.
 
 With `[explore] parallel`, attempts still running appear as nodes with `"status": "pending"` and no score. They count as calls and in their parent's `n_exp`, and they can't be continued. After `null`, git-dream asks again when a running attempt finishes, and the round ends when nothing is running.
 
-A complete example in Rust, [policies/patient.rs](policies/patient.rs) (`cargo build --release --example patient`), continues the best attempt and stops after `p` calls without improvement.
+There are three places a policy can live:
 
+1. **In the policy tree**, as above: written by the policy-development agent or by you, versioned on the policy branch, started from its checkout.
+2. **In your repository**, as a named family that dreaming can search by its grid:
+
+   ```toml
+   [policies.external.patient]
+   command = "./target/release/examples/patient"   # run from the repository root
+   source = "policies/patient.rs"                  # optional: snapshot into each policy commit
+   timeout = 10                                   # seconds per request/reply (default)
+   grid = { p = [3, 5, 8] }                  # non-empty grid => searched while dreaming
+   ```
+
+3. **In Rust:** add a variant in [src/policies.rs](src/policies.rs) and rebuild.
+
+A complete example in Rust, [policies/patient.rs](policies/patient.rs) (`cargo build --release --example patient`), continues the best attempt and stops after `p` calls without improvement.
 
 ```bash
 git dream replay "patient:p=5" "repair:c=0.02,fp=0.03,kmax=6,kfail=2,patience=12,eps=0.005,dedup=true" -v
 ```
 
-A good prompt for the meta-agent: *"Read `git dream status`, `git dream show` for the last rounds and `git dream replay -v`. Find where the deployed policy wastes calls, write a new policy, compare training and held-out replay, then freeze it and compare fresh runs against strong fixed baselines at equal total cost. Do not treat replay gains as evidence of live gains."*
+Replay gains are not live gains: after developing a policy, freeze it and compare fresh runs against strong fixed baselines at equal total cost.
 
 ## Does it work?
 
@@ -304,6 +361,8 @@ Earlier evidence (different prototype/configurations, not rerun under the new ga
 - **The yield model is coarse.** It knows 20 kinds of move, not your problem. It cannot plan a detour through worse attempts, and with fewer than a few dozen attempts it is mostly its prior. Its parameters were chosen on the two benchmarks it is reported on.
 - **Short rounds discard the search.** A new round keeps only the promoted attempt. Prefer `extend = true`; start a new round when scores from earlier attempts stop being comparable (machine drift, changed evaluator inputs).
 - **Replay knows only what was recorded.** It can't predict untried changes. With a stochastic agent (an LLM), only recorded decisions replay (`strict`), and the case study found strict dreaming can do harm. Use prospective evaluation before relying on an adapted policy; held-out replay does not correct behavior-policy selection or missing support.
+- **Policy development is scored by replay, with replay's limits.** Replay can score a policy that does less of what was recorded, not one that does something else with the same attempts, so the cheapest way to win is to stop early. The held-out check, `min_calls` and the instructions given to the agent push against that; they do not remove it. The check needs two recorded rounds, so a run that only ever extends one round never develops. The mechanism is tested with a scripted developer; no LLM-written policy has been measured here.
+- **A developed policy is a program that git-dream runs.** It is started with your permissions, from a checkout of its commit, on every decision. Read `git show dream/<run>/policy` before trusting a run someone else pushed.
 - **Early stopping can lock in.** Once rounds stop improving, the cheapest policy on replay is one that stops early. It then records too little new history to escape a local optimum. This showed up in the toy runs. Use `min_calls`, full-budget control runs, and independent data collection. Continuing an already adapted run with `--no-dream` freezes its current policy; a fresh named run is needed for an initial-policy baseline.
 - **Replay is not an oracle, and here not a filter either.** Its ranking of policies correlated weakly with their true performance (Spearman 0.03 to 0.37), and its pick was not better than the deployed policy ([numbers](docs/validation.md#can-replay-choose-a-better-policy)).
 - **Attempts at once trade information for time.** Each choice is made without the results still in flight. With `evaluations = "alone"` and a deterministic agent the round is still reproducible; otherwise which results a choice knew depends on timing (it is recorded, so the round can be extended, but a second run may differ). Replay scores rounds one attempt at a time, so it does not reproduce a round recorded with several at once. Identical designs proposed at the same time are each measured, even with `reuse = true`. Nothing here has been measured with LLM agents.

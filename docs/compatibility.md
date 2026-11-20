@@ -2,6 +2,18 @@
 
 These changes apply to the current source checkout. The archived hashbench experiments retain their original protocol; their reported results have not been regenerated with these safeguards.
 
+## The policy is a tree in git; policy development; packing and `show` are git's
+
+These follow from the tool's goal: improve the policy at no evaluation cost, with git's own tooling.
+
+- **Policy commits have a new layout.** `policy.json` on `dream/<run>/policy` is now the policy alone (`{"family", "params"}` or `{"command", "params"}`), and what was beside it in that file (the yield table, the replay ranking, the held-out check, `why`) is in `dream.json`. Versions written earlier, where `policy.json` holds both, are still read. A new version keeps the previous version's files instead of starting from an empty tree.
+- **`[develop]` is new** and off by default: with a `command`, dreaming also runs a policy-development agent. Its candidates are commits in the run `<run>.policy` (hidden from `git dream status`'s list of runs and never pooled by `history = "all"`), scored by replay, and a deployed candidate is the second parent of its policy commit. A run name ending in `.policy` is therefore reserved. `git dream clean --run X` also removes `X.policy`. With a non-`bandit` policy and `[develop]`, parameters are no longer sampled from the grids unless `[dream] method = "replay"`.
+- **A policy can be a program in the policy tree** (`"command"` in `policy.json`). It runs from a scratch worktree `<run>.policy@live`, checked out from its commit. Its `Dream-Policy` trailer reads `program@<commit>(...)`.
+- **`[storage]` is ignored.** `repack` and `gc_every` are gone; after each round git-dream runs `git maintenance run --auto`, and git packs by its own thresholds (`gc.auto`, `maintenance.*`). An old configuration with `[storage]` still loads and prints a note. Repositories now keep loose objects until git's threshold (6,700 by default) is reached; set `maintenance.loose-objects.enabled = true` and a low `maintenance.loose-objects.auto` to pack sooner.
+- **`git dream show` is `git log --graph`** over the round's refs: one line per attempt (commit, status, score, subject), newest first, with the round's `best` ref on the promoted attempt. The indented listing with `<- promoted` is gone.
+- **The yield model pools any run.** With `[dream] history = "all"`, runs recorded with another agent, evaluator or base commit no longer stop a `bandit` run: they are counted by the yield model (which only uses what each attempt did in its own tree) and still refused by replay. A new run with `history = "all"` dreams before its first round, so it starts from the other runs' yields.
+- `git dream replay --dir DIR` and `git dream -C DIR` are new.
+
 ## Default policy, yield model and round extension
 
 `[policies] initial` now defaults to `{ family = "bandit" }` when a configuration does not set it. Configurations that name a family (the earlier templates wrote `refine_best`) behave as before, and so do runs that already deployed a policy.

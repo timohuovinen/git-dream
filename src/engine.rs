@@ -1,8 +1,8 @@
 //! Configuration, the live world (real agent + evaluator + git commits) and the
 //! round loop: `[dream ->] explore -> promote`, repeated.
 
-use crate::agents::{excerpt, failure, note_output, sh, Agent, CommandAgent, EvalResult, Evaluator, SpaceAgent};
-use crate::memory::{check_run, Memory};
+use crate::agents::{excerpt, failure, note_output, sh, shell_quote, Agent, CommandAgent, EvalResult, Evaluator, SpaceAgent};
+use crate::memory::{check_run, is_policy_run, policy_run, Memory, POLICY_FILE, REPORT_FILE};
 use crate::model;
 use crate::policies::{Param, Policy, Registry};
 use crate::rng::hash;
@@ -25,13 +25,15 @@ pub struct Config {
     pub evaluate: EvalCfg,
     pub explore: ExploreCfg,
     pub dream: DreamCfg,
+    pub develop: DevelopCfg,
     pub policies: PoliciesCfg,
-    pub storage: StorageCfg,
+    /// Ignored (older configurations): packing is left to `git maintenance`.
+    pub storage: Option<toml::Value>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { run: "main".into(), agent: AgentCfg::default(), evaluate: EvalCfg::default(), explore: ExploreCfg::default(), dream: DreamCfg::default(), policies: PoliciesCfg::default(), storage: StorageCfg::default() }
+        Config { run: "main".into(), agent: AgentCfg::default(), evaluate: EvalCfg::default(), explore: ExploreCfg::default(), dream: DreamCfg::default(), develop: DevelopCfg::default(), policies: PoliciesCfg::default(), storage: None }
     }
 }
 
@@ -170,22 +172,29 @@ impl Default for PoliciesCfg {
     }
 }
 
-/// Attempts are written with plumbing (hash-object, commit-tree, update-ref),
-/// which never triggers `git gc --auto`: every version of a file stays a full
-/// loose object until something packs it.
+/// The policy-development agent: while dreaming, it rewrites the exploration
+/// policy itself. It works like `[agent]`, one level up: each of its attempts
+/// is a commit holding a policy (`policy.json` and, if the policy is a program,
+/// its files), scored by replaying it over the recorded attempts. That costs
+/// no evaluations. The winner is deployed if it also does better on the
+/// held-out rounds (`[dream] holdout`).
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
-pub struct StorageCfg {
-    /// After each round, pack its loose objects into one pack (`git repack -d`),
-    /// so near-identical attempts are stored as deltas.
-    pub repack: bool,
-    /// Every N rounds also run `git gc` to merge the per-round packs (0 = never).
-    pub gc_every: u32,
+pub struct DevelopCfg {
+    /// Edits the policy in its worktree (env as for `[agent] command`). Empty: no policy development.
+    pub command: String,
+    /// Added to the built-in instructions.
+    pub prompt: String,
+    /// Candidate policies per dream.
+    pub attempts: usize,
+    /// Candidates being written at once.
+    pub parallel: usize,
+    pub timeout: f64,
 }
 
-impl Default for StorageCfg {
+impl Default for DevelopCfg {
     fn default() -> Self {
-        StorageCfg { repack: true, gc_every: 10 }
+        DevelopCfg { command: String::new(), prompt: String::new(), attempts: 4, parallel: 1, timeout: 1800.0 }
     }
 }
 
@@ -202,6 +211,9 @@ fn toml_to_json(v: &toml::Value) -> Value {
 /// design -> (score, status, sha) measured in this run (evaluate.reuse).
 type Seen = HashMap<String, (Option<f64>, String, String)>;
 
+/// Scores what is checked out in a worktree, in this process.
+type Scorer = Box<dyn Fn(&Path) -> EvalResult + Send + Sync>;
+
 pub struct Engine {
     pub mem: Memory,
     pub cfg: Config,
@@ -213,6 +225,17 @@ pub struct Engine {
     pub quiet: bool,
     seen: Mutex<Seen>,
     external_files: Vec<(String, String)>,
+    config_path: PathBuf,
+    /// Replaces `[evaluate] command`. Set on the run that holds candidate
+    /// policies: an attempt there is a policy, and its score is its replay.
+    scorer: Option<Scorer>,
+    /// The commit every round starts from, instead of the previous round's
+    /// promoted attempt (candidate policies start from the deployed one).
+    start_from: Option<String>,
+    /// Added to the agent's environment.
+    extra_env: Vec<(String, String)>,
+    /// Starts every progress line.
+    prefix: String,
 }
 
 impl Engine {
@@ -221,6 +244,13 @@ impl Engine {
         let path = config.map(PathBuf::from).unwrap_or_else(|| mem.top.join(CONFIG_NAME));
         let (cfg, raw) = load_config(&path)?;
         let run = run.map(String::from).unwrap_or_else(|| cfg.run.clone());
+        if cfg.storage.is_some() {
+            eprintln!("git dream: note: [storage] in {} is ignored: git packs attempts itself (`git maintenance run --auto`; tune it with gc.auto)", path.display());
+        }
+        Engine::with_config(mem, cfg, raw, run, std::path::absolute(&path).unwrap_or(path))
+    }
+
+    fn with_config(mem: Memory, cfg: Config, raw: String, run: String, config_path: PathBuf) -> Result<Engine> {
         check_run(&run)?;
         let a = &cfg.agent;
         let agent = match a.kind.as_str() {
@@ -246,6 +276,9 @@ impl Engine {
             anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "timeouts must be finite, positive and below 1e9 seconds");
         }
         anyhow::ensure!(cfg.evaluate.confirm_top == 0 || cfg.evaluate.confirm_reps > 0, "confirmation needs confirm_reps > 0");
+        let d = &cfg.develop;
+        anyhow::ensure!(d.attempts > 0 && (1..=64).contains(&d.parallel), "develop.attempts must be positive and develop.parallel between 1 and 64");
+        anyhow::ensure!(d.timeout.is_finite() && d.timeout > 0.0 && d.timeout < 1e9, "develop.timeout must be finite, positive and below 1e9 seconds");
         let mut registry = Registry::builtin();
         let mut external_files = vec![];
         for (name, v) in &cfg.policies.external {
@@ -279,12 +312,12 @@ impl Engine {
                 }
             }
         }
-        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: Mutex::new(seen), external_files })
+        Ok(Engine { mem, cfg, raw_cfg: raw, run, agent, registry, goal, quiet: false, seen: Mutex::new(seen), external_files, config_path, scorer: None, start_from: None, extra_env: vec![], prefix: String::new() })
     }
 
     fn log(&self, s: &str) {
         if !self.quiet {
-            println!("{s}");
+            println!("{}{s}", self.prefix);
         }
     }
 
@@ -336,6 +369,9 @@ impl Engine {
         }
         let wt = self.wt(lane)?;
         self.mem.materialize(&wt, tree)?;
+        if let Some(score) = &self.scorer {
+            return Ok(score(&wt));
+        }
         let mut env = vec![
             ("DREAM_RUN".to_string(), self.run.clone()),
             ("DREAM_ROUND".into(), round.to_string()),
@@ -354,15 +390,40 @@ impl Engine {
         Ok(p)
     }
 
+    /// The policy `round` used (None: the newest version), from the policy
+    /// branch. A policy that is a program is checked out first, so it can run.
     pub fn deployed(&self, round: Option<u32>) -> Result<Option<Policy>> {
-        match self.mem.policy_doc(&self.run, round) {
-            Some(doc) => {
-                let mut p = self.registry.make(&doc["policy"])?;
-                p.set_min_calls(self.cfg.explore.min_calls);
-                Ok(Some(p))
-            },
-            None => Ok(None),
-        }
+        let Some(doc) = self.mem.policy_doc(&self.run, round) else { return Ok(None) };
+        let spec = &doc["policy"];
+        let mut p = if spec.get("command").is_some() {
+            let commit = self.mem.policy_commit(&self.run, round).ok_or_else(|| anyhow!("the policy of run {:?} has no commit", self.run))?;
+            let dir = self.mem.policy_checkout(&self.run, &commit)?;
+            let mut p = self.registry.make_in(spec, Some(&dir))?;
+            p.version = Some(commit[..commit.len().min(7)].to_string());
+            p
+        } else {
+            self.registry.make(spec)?
+        };
+        p.set_min_calls(self.cfg.explore.min_calls);
+        Ok(Some(p))
+    }
+
+    /// The policy in a checked-out policy tree: its `policy.json`.
+    pub fn policy_in(&self, dir: &Path) -> Result<Policy> {
+        let path = dir.join(POLICY_FILE);
+        let raw = std::fs::read_to_string(&path).with_context(|| format!("the policy needs a {POLICY_FILE}"))?;
+        let doc: Value = serde_json::from_str(&raw).with_context(|| format!("{POLICY_FILE} is not JSON"))?;
+        let mut p = self.registry.make_in(doc.get("policy").unwrap_or(&doc), Some(dir))?;
+        p.set_min_calls(self.cfg.explore.min_calls);
+        Ok(p)
+    }
+
+    /// Record `policy` as the version `round` uses. `report` says how it was chosen.
+    fn commit_policy(&self, round: u32, policy: &Policy, mut report: Value, from: Option<&str>) -> Result<String> {
+        report["run"] = json!(self.run);
+        report["round"] = json!(round);
+        report["repr"] = json!(policy.repr());
+        self.mem.commit_policy(&self.run, round, &policy.spec(), &report, &self.policy_files(), from)
     }
 
     pub fn current_policy(&self) -> Result<Policy> {
@@ -390,12 +451,20 @@ impl Engine {
         }
     }
 
-    /// A design key alone does not identify its objective or proposal operator.
-    /// Reject pooling incompatible experiments instead of silently reusing scores.
+    /// The recorded rounds as replay may use them. A design key alone does not
+    /// identify its objective or proposal operator, so pooling rounds made with
+    /// another agent, evaluator or base commit is rejected instead of silently
+    /// reusing their scores. (The yield model needs no such check: it counts
+    /// what each attempt did in its own tree.)
     pub fn replay_history(&self) -> Result<Vec<Tree>> {
         let hist = self.history()?;
+        self.compatible(&hist)?;
+        Ok(hist)
+    }
+
+    fn compatible(&self, hist: &[Tree]) -> Result<()> {
         let base = self.mem.rev(&format!("refs/dream/{}/base", self.run)).or_else(|| self.mem.rev("HEAD^{commit}"));
-        for t in &hist {
+        for t in hist {
             let path = format!("refs/tags/dream/{}/policy-r{:02}:git-dream.toml", t.run, t.round);
             let raw = self.mem.git(&["show", &path]).with_context(|| format!("cannot verify experiment configuration for {} r{}", t.run, t.round))?;
             let recorded: Config = toml::from_str(&raw)?;
@@ -404,7 +473,18 @@ impl Engine {
             anyhow::ensure!(self.mem.rev(&format!("refs/dream/{}/base", t.run)) == base,
                 "cannot replay runs with different base commits ({})", t.run);
         }
-        Ok(hist)
+        Ok(())
+    }
+
+    /// Before adding to a run: its recorded rounds must have been made with
+    /// this agent and evaluator, or their scores do not compare with new ones.
+    fn check_own(&self) -> Result<()> {
+        if is_policy_run(&self.run) {
+            anyhow::ensure!(self.scorer.is_some(), "run {:?} holds the candidate policies of run {:?}; `git dream dream` searches it", self.run, self.run.trim_end_matches(".policy"));
+            // a candidate's score is its replay over the history of its time: never pooled
+            return Ok(());
+        }
+        self.compatible(&self.mem.history(&self.run)?)
     }
 
     pub fn next_round(&self) -> Result<u32> {
@@ -412,29 +492,80 @@ impl Engine {
     }
 
     // ---- dreaming ------------------------------------------------------------------
-    /// Replay the deployed policy and sampled alternatives over recorded history
-    /// (zero new evaluations) and, if `commit`, deploy the best for `round`.
+    /// Learn from recorded history, at zero evaluations, and (if `commit`)
+    /// deploy the policy for `round`:
+    ///
+    /// 1. a `bandit` policy is refitted from measured outcomes (the yield model);
+    ///    any other family is tuned by replay over sampled parameters;
+    /// 2. with `[develop] command`, a policy-development agent then rewrites the
+    ///    policy itself, starting from the deployed one ([`Engine::develop`]).
+    ///
+    /// Returns the replay ranking of step 1, if it replayed.
     pub fn dream(&self, round: Option<u32>, candidates: Option<usize>, mode: Option<Mode>, budget: Option<usize>, commit: bool) -> Result<Vec<(Policy, ReplayResult)>> {
+        self.check_own()?;
         let round = match round {
             Some(r) => r,
             None => self.next_round()?,
         };
-        let hist = self.replay_history()?;
+        let hist = self.history()?;
         let current = self.current_policy()?;
         if hist.is_empty() {
             self.log(&format!("dream: no history yet, keeping {}", current.repr()));
             return Ok(vec![]);
         }
-        if self.cfg.dream.method != "replay" {
-            if let Some((best, y)) = model::learn(&current, &hist) {
-                return self.dream_model(round, &hist, &current, &best, &y, commit);
-            }
+        let develop = !self.cfg.develop.command.is_empty();
+        let replay = self.cfg.dream.method == "replay";
+        let mut ranking = vec![];
+        match if replay { None } else { model::learn(&current, &hist) } {
+            Some((best, y)) => self.dream_model(round, &hist, &current, &best, &y, commit)?,
+            // an agent that writes policies replaces sampling their parameters, unless both are asked for
+            None if develop && !replay => {}
+            None => ranking = self.dream_replay(round, &hist, &current, candidates, mode, budget, commit)?,
         }
+        if develop && commit {
+            self.develop(round, &hist, mode, budget)?;
+        } else if develop {
+            self.log("(dry run: the policy-development agent is not started)");
+        }
+        Ok(ranking)
+    }
+
+    fn replay_mode(&self, mode: Option<Mode>) -> Mode {
+        // a stochastic agent replays recorded edges only
+        if self.agent.space().is_some() { mode.unwrap_or(self.mode()) } else { Mode::Strict }
+    }
+
+    /// The newest rounds of each run, set aside to check a replay winner
+    /// (`[dream] holdout`). None: switched off, or not enough rounds yet.
+    fn partition(&self, hist: &[Tree]) -> Option<(Vec<Tree>, Vec<Tree>)> {
+        if self.cfg.dream.holdout > 0 { sim::split_history(hist, self.cfg.dream.holdout).ok() } else { None }
+    }
+
+    /// The held-out deployment gate: `candidate` won on the training rounds; it
+    /// replaces `current` only if it also has a higher J and no higher miss
+    /// rate on the rounds set aside (`test`).
+    fn gate(&self, candidate: &Policy, current: &Policy, test: Option<&[Tree]>, budget: usize, mode: Mode) -> Result<(bool, Value)> {
+        let Some(test) = test else { return Ok((self.cfg.dream.holdout == 0, json!({"reason": "held-out gate disabled or insufficient history"}))) };
+        let replay = |p| sim::replay(p, test, budget, self.cfg.dream.lam, self.agent.space(), mode, self.normalize_root(), false);
+        let proposed = replay(candidate)?;
+        let incumbent = replay(current)?;
+        Ok((proposed.j > incumbent.j && proposed.miss_rate <= incumbent.miss_rate, json!({
+            "candidate_J": proposed.j, "current_J": incumbent.j,
+            "candidate_miss_rate": proposed.miss_rate, "current_miss_rate": incumbent.miss_rate,
+            "rounds": test.iter().map(|t| json!({"run": t.run, "round": t.round})).collect::<Vec<_>>(),
+            "caveat": "diagnostic gate only; repeated use and behavior-policy selection prevent an unbiased generalization estimate"
+        })))
+    }
+
+    /// Dreaming as in the paper, over parameters: replay the deployed policy
+    /// and sampled alternatives over recorded history and deploy the best.
+    #[allow(clippy::too_many_arguments)]
+    fn dream_replay(&self, round: u32, hist: &[Tree], current: &Policy, candidates: Option<usize>, mode: Option<Mode>, budget: Option<usize>, commit: bool) -> Result<Vec<(Policy, ReplayResult)>> {
+        self.compatible(hist)?;
         let budget = budget.unwrap_or(self.cfg.explore.budget);
-        let mode = mode.unwrap_or(self.mode());
-        let eff = if self.agent.space().is_some() { mode } else { Mode::Strict };
-        let partition = if self.cfg.dream.holdout > 0 { sim::split_history(&hist, self.cfg.dream.holdout).ok() } else { None };
-        let training = partition.as_ref().map_or(hist.as_slice(), |(train, _)| train.as_slice());
+        let eff = self.replay_mode(mode);
+        let partition = self.partition(hist);
+        let training = partition.as_ref().map_or(hist, |(train, _)| train.as_slice());
         let fams = self.registry.searchable(&self.cfg.policies.families);
         let a = DreamArgs {
             history: training,
@@ -450,41 +581,149 @@ impl Engine {
             families: &fams,
             threads: crate::par::threads(),
         };
-        let ranking = sim::dream(&current, &[], &a)?;
+        let ranking = sim::dream(current, &[], &a)?;
         let (candidate, top) = (&ranking[0].0, &ranking[0].1);
-        let (accepted, validation) = if let Some((_, test)) = &partition {
-            let replay = |p| sim::replay(p, test, budget, self.cfg.dream.lam, self.agent.space(), eff, self.normalize_root(), false);
-            let proposed = replay(candidate)?;
-            let incumbent = replay(&current)?;
-            (proposed.j > incumbent.j && proposed.miss_rate <= incumbent.miss_rate, json!({
-                "candidate_J": proposed.j, "current_J": incumbent.j,
-                "candidate_miss_rate": proposed.miss_rate, "current_miss_rate": incumbent.miss_rate,
-                "rounds": test.iter().map(|t| json!({"run": t.run, "round": t.round})).collect::<Vec<_>>(),
-                "caveat": "diagnostic gate only; repeated use and behavior-policy selection prevent an unbiased generalization estimate"
-            }))
-        } else { (self.cfg.dream.holdout == 0, json!({"reason": "held-out gate disabled or insufficient history"})) };
-        let best = if accepted { candidate } else { &current };
+        let (accepted, validation) = self.gate(candidate, current, partition.as_ref().map(|p| p.1.as_slice()), budget, eff)?;
+        let best = if accepted { candidate } else { current };
         self.log(&format!("held-out deployment gate: {} ({validation})", if accepted { "accepted" } else { "keeping incumbent" }));
         let cur = &ranking.iter().find(|(c, _)| c.repr() == current.repr()).unwrap().1;
         self.log(&format!("dream r{round}: {} policies over {} trees ({}); current J={:.4}, best J={:.4} -> {}", ranking.len(), hist.len(), eff.as_str(), cur.j, top.j, best.repr()));
         if commit {
-            let doc = json!({
-                "run": self.run, "round": round, "policy": best.spec(), "repr": best.repr(),
-                "validation": validation, "accepted": accepted, "candidate": candidate.spec(),
+            let report = json!({
+                "method": "replay", "validation": validation, "accepted": accepted, "candidate": candidate.spec(),
                 "why": format!("dreamt over {} recorded trees, {} candidate policies, {} replay", hist.len(), ranking.len(), eff.as_str()),
                 "dream": {"J": if accepted { top.j } else { cur.j }, "candidate_J": top.j, "gain": if accepted { top.gain } else { cur.gain }, "calls": if accepted { top.calls } else { cur.calls }, "miss_rate": if accepted { top.miss_rate } else { cur.miss_rate }, "J_current": cur.j, "current": current.repr(),
                           "mode": eff.as_str(), "lam": self.cfg.dream.lam, "budget": budget, "trees": hist.len(), "candidates": ranking.len()},
                 "top": ranking.iter().take(10).map(|(c, r)| json!({"policy": c.repr(), "spec": c.spec(), "J": r.j, "gain": r.gain, "calls": r.calls, "miss_rate": r.miss_rate})).collect::<Vec<_>>(),
             });
-            self.mem.commit_policy(&self.run, round, &doc, &self.policy_files())?;
+            self.commit_policy(round, best, report, None)?;
         }
         Ok(ranking)
+    }
+
+    /// Score the policy checked out in `dir` by replaying it over `history`:
+    /// J, as a result the search over policies can use. A policy that cannot be
+    /// built or stops answering is a failed attempt, with the reason as its output.
+    pub fn score_policy(&self, dir: &Path, history: &[Tree], budget: usize, mode: Mode) -> EvalResult {
+        let scored = self.policy_in(dir).and_then(|p| {
+            let r = sim::replay(&p, history, budget, self.cfg.dream.lam, self.agent.space(), mode, self.normalize_root(), false)?;
+            Ok((p, r))
+        });
+        match scored {
+            Ok((p, r)) => EvalResult {
+                score: Some(r.j),
+                status: OK.into(),
+                note: json!({"score": r.j, "status": OK, "policy": p.repr(), "replay": {"J": r.j, "gain": r.gain, "calls": r.calls, "miss_rate": r.miss_rate, "rounds": history.len(), "mode": mode.as_str(), "budget": budget}}),
+            },
+            Err(e) => EvalResult { score: None, status: FAIL.into(), note: json!({"status": FAIL, "exit": "the policy does not run", "stderr": format!("{e:#}")}) },
+        }
+    }
+
+    /// The rounds a candidate policy is scored on, and how: what `git dream
+    /// replay --dir` and the policy-development agent's attempts both use.
+    pub fn scoring(&self, mode: Option<Mode>, budget: Option<usize>) -> Result<(Vec<Tree>, usize, Mode)> {
+        let hist = self.replay_history()?;
+        let training = self.partition(&hist).map_or(hist, |(train, _)| train);
+        Ok((training, budget.unwrap_or(self.cfg.explore.budget), self.replay_mode(mode)))
+    }
+
+    /// Policy development (the paper's stronger lever): an agent rewrites the
+    /// policy, and nothing is evaluated. It is a search like the one it
+    /// improves, one level up, in the run `<run>.policy`: every candidate is a
+    /// commit that starts from the deployed policy's commit, its score is its
+    /// replay J over the training rounds, the agent reads every earlier
+    /// candidate with its score, and the best one is promoted. That one is
+    /// deployed if it passes the held-out gate, as a commit on the policy
+    /// branch with the candidate as its second parent.
+    fn develop(&self, round: u32, hist: &[Tree], mode: Option<Mode>, budget: Option<usize>) -> Result<()> {
+        self.compatible(hist)?;
+        let budget = budget.unwrap_or(self.cfg.explore.budget);
+        let eff = self.replay_mode(mode);
+        let partition = self.partition(hist);
+        if partition.is_none() && self.cfg.dream.holdout > 0 {
+            self.log(&format!("develop r{round}: waiting for more than {} recorded round{} per run: a candidate must also do better on rounds it was not scored on ([dream] holdout = 0 switches that check off)", self.cfg.dream.holdout, if self.cfg.dream.holdout == 1 { "" } else { "s" }));
+            return Ok(());
+        }
+        let mut current = self.current_policy()?;
+        let tip = match self.mem.policy_commit(&self.run, None) {
+            Some(c) => c,
+            None => self.commit_policy(round, &current, json!({"why": "initial policy"}), None)?,
+        };
+        let training = partition.as_ref().map_or(hist, |(train, _)| train.as_slice());
+        let sub = self.developer(&tip, training.to_vec(), budget, eff)?;
+        sub.resume()?;
+        let sub_round = sub.next_round()?;
+        self.log(&format!("develop r{round}: {} candidate policies from {}, scored by replay over {} recorded round{} ({}; no evaluations)", self.cfg.develop.attempts, current.repr(), training.len(), if training.len() == 1 { "" } else { "s" }, eff.as_str()));
+        let t = sub.explore(Some(sub_round), Some(self.cfg.develop.attempts))?;
+        let best = t.best().ok_or_else(|| anyhow!("no candidate policy was scored"))?;
+        if best.id == 0 {
+            self.log(&format!("develop r{round}: no candidate scored above the deployed policy; keeping {}", current.repr()));
+            return Ok(());
+        }
+        let dir = sub.wt(0)?;
+        sub.mem.materialize(&dir, &sub.mem.tree_of(&best.sha)?)?;
+        let candidate = self.policy_in(&dir)?;
+        current.reset(0);
+        let (accepted, validation) = self.gate(&candidate, &current, partition.as_ref().map(|p| p.1.as_slice()), budget, eff)?;
+        // the next candidates' agents read what became of this one
+        let mut note = self.mem.read_note(&best.sha).unwrap_or(json!({}));
+        note["deployment"] = json!({"accepted": accepted, "validation": validation});
+        self.mem.note(&best.sha, &note)?;
+        let scores = format!("replay J {} against {} for the deployed policy", fs(best.score), fs(t.root().score));
+        if !accepted {
+            self.log(&format!("develop r{round}: {} n{:03} wins on the training rounds ({scores}) and fails the held-out gate ({validation}); keeping {}", sub.run, best.id, current.repr()));
+            return Ok(());
+        }
+        let report = json!({
+            "method": "develop", "accepted": true, "validation": validation, "candidate": best.sha,
+            "why": format!("written by the policy-development agent ({} r{sub_round:02} n{:03}: {}); {scores} over {} recorded round{}, {} replay", sub.run, best.id, short(summary(&best.change), 100), training.len(), if training.len() == 1 { "" } else { "s" }, eff.as_str()),
+            "develop": {"run": sub.run, "round": sub_round, "J": best.score, "J_current": t.root().score, "mode": eff.as_str(), "lam": self.cfg.dream.lam, "budget": budget, "trees": training.len(),
+                        "candidates": t.nodes.iter().skip(1).map(|n| json!({"attempt": n.sha, "status": n.status, "J": n.score, "summary": summary(&n.change)})).collect::<Vec<_>>()},
+        });
+        let sha = self.commit_policy(round, &candidate, report, Some(&best.sha))?;
+        self.log(&format!("develop r{round}: deployed {} n{:03} as {} ({scores}; held-out gate passed)  {}", sub.run, best.id, candidate.repr(), &sha[..10]));
+        Ok(())
+    }
+
+    /// The engine that searches candidate policies for this run.
+    fn developer(&self, tip: &str, training: Vec<Tree>, budget: usize, mode: Mode) -> Result<Engine> {
+        let d = &self.cfg.develop;
+        let run = policy_run(&self.run);
+        let exe = std::env::current_exe().context("locating the git-dream binary")?;
+        let config = if self.config_path == self.mem.top.join(CONFIG_NAME) { String::new() } else { format!(" --config {}", shell_quote(&self.config_path.to_string_lossy())) };
+        let tool = format!("{} -C {}", shell_quote(&exe.to_string_lossy()), shell_quote(&self.mem.top.to_string_lossy()));
+        let check = format!("{tool} replay --dir \"$PWD\" --run {}{config}", self.run);
+        let look = format!("{tool} show --run {}{config}", self.run);
+        let prompt = format!("{}\n\n{}", developer_prompt(&self.run, &check, &look, &format!("{tool} policies{config}")), d.prompt.trim()).trim().to_string();
+        let table = |pairs: Vec<(&str, toml::Value)>| toml::Value::Table(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+        let text = |s: &str| toml::Value::String(s.to_string());
+        let cfg = table(vec![
+            ("run", text(&run)),
+            ("agent", table(vec![("kind", text("command")), ("command", text(&d.command)), ("prompt", text(&prompt)), ("timeout", toml::Value::Float(d.timeout))])),
+            // what the score is; it is computed in this process ([`Engine::score_policy`])
+            ("evaluate", table(vec![("command", text(&format!("git dream replay --dir . --run {}", self.run))), ("goal", text("max"))])),
+            ("explore", table(vec![("budget", toml::Value::Integer(d.attempts as i64)), ("parallel", toml::Value::Integer(d.parallel as i64)), ("evaluations", text("parallel"))])),
+        ]);
+        let raw = toml::to_string(&cfg)?;
+        let mut sub = Engine::with_config(self.mem.clone(), toml::from_str(&raw)?, raw, run, self.config_path.clone())?;
+        let base = format!("refs/dream/{}/base", sub.run);
+        if sub.mem.rev(&base).is_none() {
+            sub.mem.set_ref(&base, tip)?;
+        }
+        sub.quiet = self.quiet;
+        sub.prefix = "  policy: ".into();
+        sub.start_from = Some(tip.to_string());
+        sub.extra_env = vec![("DREAM_CHECK".into(), check), ("DREAM_SEARCH_RUN".into(), self.run.clone())];
+        let mut scoring = Engine::with_config(self.mem.clone(), self.cfg.clone(), self.raw_cfg.clone(), self.run.clone(), self.config_path.clone())?;
+        scoring.quiet = true;
+        sub.scorer = Some(Box::new(move |dir| scoring.score_policy(dir, &training, budget, mode)));
+        Ok(sub)
     }
 
     /// Dreaming for a `bandit` policy: no candidate is scored on outcomes that
     /// were never observed. The policy for `round` carries the yield of each
     /// kind of move, measured over every recorded attempt.
-    fn dream_model(&self, round: u32, hist: &[Tree], current: &Policy, best: &Policy, y: &model::Yield, commit: bool) -> Result<Vec<(Policy, ReplayResult)>> {
+    fn dream_model(&self, round: u32, hist: &[Tree], current: &Policy, best: &Policy, y: &model::Yield, commit: bool) -> Result<()> {
         let m = current.p("m", model::STRENGTH);
         let attempts: usize = hist.iter().map(Tree::calls).sum();
         self.log(&format!("dream r{round}: yield model over {attempts} recorded attempts in {} rounds (weight halves every {} attempts)", hist.len(), fs(Some(current.p("halflife", model::HALFLIFE)))));
@@ -499,14 +738,14 @@ impl Engine {
             table.push(json!({"move": model::name(b), "what": model::describe(b), "weight": y.n[b], "credit": y.s[b], "yield": a / (a + c), "interval90": [lo, hi], "prior": model::prior(b)}));
         }
         if commit {
-            let doc = json!({
-                "run": self.run, "round": round, "policy": best.spec(), "repr": best.repr(), "method": "model",
+            let report = json!({
+                "method": "model",
                 "why": format!("yield model fitted over {attempts} recorded attempts in {} rounds: measured outcomes only, no replay of unobserved decisions", hist.len()),
                 "model": table,
             });
-            self.mem.commit_policy(&self.run, round, &doc, &self.policy_files())?;
+            self.commit_policy(round, best, report, None)?;
         }
-        Ok(vec![])
+        Ok(())
     }
 
     pub fn replay(&self, policy: &Policy, mode: Option<Mode>, budget: Option<usize>) -> Result<ReplayResult> {
@@ -521,8 +760,9 @@ impl Engine {
         }
         let p = self.current_policy()?;
         let why = if round == 1 { "initial policy" } else { "carried over (no dream before this round)" };
-        self.mem.commit_policy(&self.run, round, &json!({"run": self.run, "round": round, "policy": p.spec(), "repr": p.repr(), "why": why}), &self.policy_files())?;
-        Ok(p)
+        self.commit_policy(round, &p, json!({"why": why}), None)?;
+        // a program runs from the checkout of its commit
+        Ok(self.deployed(Some(round))?.unwrap_or(p))
     }
 
     fn params_file(&self, s: &SpaceAgent, design: &str) -> Vec<(String, String)> {
@@ -532,7 +772,10 @@ impl Engine {
     fn make_root(&self, round: u32, budget: usize, policy: &Policy) -> Result<Node> {
         let base = self.base()?;
         let mut t = Tree::new(&self.run, round, budget, self.goal, &policy.repr());
-        let (parent, tree, design, change, res) = if round == 1 {
+        let (parent, tree, design, change, res) = if let Some(start) = &self.start_from {
+            let tr = self.mem.tree_of(start)?;
+            (start.clone(), tr.clone(), tr, "the deployed policy".to_string(), None)
+        } else if round == 1 {
             let (tree, design) = match &self.agent {
                 Agent::Space(s) => (self.mem.tree_with_files(Some(&base), &self.params_file(s, &s.root()))?, s.root()),
                 Agent::Command(_) => {
@@ -572,7 +815,7 @@ impl Engine {
                 self.next_round()?
             }
         };
-        if round > 1 { self.replay_history()?; }
+        self.check_own()?;
         let budget = budget.unwrap_or(self.cfg.explore.budget);
         anyhow::ensure!(budget > 0 && budget >= self.cfg.explore.min_calls, "budget must be positive and at least explore.min_calls");
         let mut policy = self.policy_for(round)?;
@@ -597,7 +840,7 @@ impl Engine {
     /// (attempts that were running when it died are run again).
     pub fn extend(&self, budget: Option<usize>) -> Result<Tree> {
         let Some(&round) = self.mem.rounds(&self.run)?.last() else { return self.explore(Some(1), budget) };
-        self.replay_history()?;
+        self.check_own()?;
         let rec = self.mem.load_tree(&self.run, round)?.ok_or_else(|| anyhow!("round {round} not found"))?;
         let add = budget.unwrap_or(self.cfg.explore.budget);
         anyhow::ensure!(add > 0, "budget must be positive");
@@ -622,7 +865,8 @@ impl Engine {
         }
         let mut out = vec![];
         for i in 0..n {
-            if i == 0 && new_round && !self.mem.rounds(&self.run)?.is_empty() {
+            // a round starts with a dream (a run's first one: over the other runs, with history = "all")
+            if (i == 0 && new_round) || self.mem.rounds(&self.run)?.is_empty() {
                 out.extend(self.rounds(1, dream, budget, candidates, mode)?);
             } else {
                 out.push(self.extend(budget)?);
@@ -765,7 +1009,7 @@ impl Engine {
             self.seen().entry(n.design.clone()).or_insert((n.score, n.status.clone(), n.sha.clone()));
         }
         if !self.quiet {
-            print_attempt(t, &n);
+            print_attempt(&self.prefix, t, &n);
         }
         t.resolve(n);
         Ok(())
@@ -813,20 +1057,11 @@ impl Engine {
         Ok((n, tree, note))
     }
 
-    /// Pack the round's loose objects (and every `gc_every` rounds run git gc).
-    /// The round is already recorded, so a failure here is only a warning.
+    /// Let git pack what the round wrote, if it thinks it is time. The round is
+    /// already recorded, so a failure here is only a warning.
     fn compact(&self, round: u32) {
-        let s = &self.cfg.storage;
-        let r = if s.gc_every > 0 && round.is_multiple_of(s.gc_every) {
-            self.log(&format!("  r{round}: git gc"));
-            self.mem.gc()
-        } else if s.repack {
-            self.mem.repack()
-        } else {
-            return;
-        };
-        if let Err(e) = r {
-            eprintln!("git dream: warning: packing objects after round {round} failed: {e:#}");
+        if let Err(e) = self.mem.maintain() {
+            eprintln!("git dream: warning: git maintenance after round {round} failed: {e:#}");
         }
     }
 
@@ -922,7 +1157,7 @@ impl Engine {
         let mut out = vec![];
         for _ in 0..n {
             let r = self.next_round()?;
-            if dream && r > 1 {
+            if dream && (r > 1 || self.cfg.dream.history == "all") {
                 self.dream(Some(r), candidates, mode, budget, true)?;
             }
             out.push(self.explore(Some(r), budget)?);
@@ -931,14 +1166,14 @@ impl Engine {
     }
 }
 
-fn print_attempt(t: &Tree, n: &Node) {
+fn print_attempt(prefix: &str, t: &Tree, n: &Node) {
     let b = t.best().and_then(|b| b.score);
     let best = match (b, n.score) {
         (Some(b), Some(s)) if t.cost(s) < t.cost(b) => Some(s),
         (None, s) => s,
         (b, _) => b,
     };
-    println!("  r{} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", t.round, n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
+    println!("{prefix}  r{} n{:03} <- n{:03} {:5} {:>10}  best {:>10}  {}", t.round, n.id, n.parent.unwrap(), n.status, fs(n.score), fs(best), short(summary(&n.change), 60));
 }
 
 /// Where, inside the scratch worktree, git-dream puts the files it hands a
@@ -961,12 +1196,13 @@ fn run_agent(e: &Engine, c: &CommandAgent, lane: usize, t: &Tree, parent: usize,
     let mut earlier: Vec<Tree> = e.history()?.into_iter().filter(|h| h.run != e.run || h.round < t.round).collect();
     earlier.sort_by_key(|h| h.run == e.run);
     let trees: Vec<&Tree> = earlier.iter().chain([t]).collect();
-    let failed: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != OK && n.status != NOOP && n.status != PENDING).map(|n| n.sha.as_str()).collect();
-    let notes = e.mem.notes_of(&failed)?;
+    // notes: the evaluator output of failures; for a candidate policy, whether it was deployed
+    let noted: Vec<&str> = trees.iter().flat_map(|h| &h.nodes).filter(|n| n.status != PENDING && (e.scorer.is_some() || (n.status != OK && n.status != NOOP))).map(|n| n.sha.as_str()).collect();
+    let notes = e.mem.notes_of(&noted)?;
     std::fs::write(&ctx, history_context(&trees, parent, k, &notes))?;
     let context = agent_context(t, parent, k);
     let p = &t.nodes[parent];
-    let env = vec![
+    let mut env = vec![
         ("DREAM_RUN".to_string(), e.run.clone()),
         ("DREAM_ROUND".into(), t.round.to_string()),
         ("DREAM_PARENT".into(), p.sha.clone()),
@@ -979,6 +1215,7 @@ fn run_agent(e: &Engine, c: &CommandAgent, lane: usize, t: &Tree, parent: usize,
         ("DREAM_WORKTREE".into(), wt.to_string_lossy().into_owned()),
         ("DREAM_LANE".into(), lane.to_string()),
     ];
+    env.extend(e.extra_env.iter().cloned());
     let r = sh(&c.command, &wt, &env, c.timeout)?;
     let msg = std::fs::read_to_string(&msgf).map(|s| s.trim().to_string()).unwrap_or_default();
     let msg = if msg.is_empty() { format!("agent change (k={k})") } else { msg };
@@ -1080,7 +1317,11 @@ pub fn history_context(trees: &[&Tree], parent: usize, k: usize, notes: &HashMap
         for n in t.nodes.iter().filter(|n| n.status != PENDING) {
             let note = notes.get(&n.sha);
             let result = match n.status.as_str() {
-                OK => format!("ok {}", fs(n.score)),
+                OK => match note.and_then(|v| v["deployment"]["accepted"].as_bool()) {
+                    Some(true) => format!("ok {} · deployed", fs(n.score)),
+                    Some(false) => format!("ok {} · not deployed: no better on the held-out rounds", fs(n.score)),
+                    None => format!("ok {}", fs(n.score)),
+                },
                 NOOP => "noop (the agent changed nothing)".into(),
                 st => match note {
                     Some(v) if v.get("reused").is_some() => format!("{st} (same code as {}, not re-run)", short(v["reused"].as_str().unwrap_or(""), 10)),
@@ -1139,6 +1380,28 @@ pub fn short(s: &str, n: usize) -> String {
     }
 }
 
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
+/// What the policy-development agent is told before the usual search context.
+fn developer_prompt(run: &str, check: &str, look: &str, families: &str) -> String {
+    format!(
+        "You are improving the exploration policy of a git-dream search (run `{run}`): the code that decides which recorded attempt the search continues next, and when it stops. You are not working on the task that search is solving.
+
+This directory is the policy, checked out from git. `{POLICY_FILE}` says what it is:
+
+- a built-in family with parameters, `{{\"family\": \"bandit\", \"params\": {{...}}}}` (`{families}` lists the families and their parameters), or
+- a program of your own, kept in this directory: `{{\"command\": \"<how to start it>\", \"params\": {{...}}}}`.
+
+A program is started once, in this directory, with `sh -c <command>`. For every decision it reads one JSON line on standard input:
+
+    {{\"params\": {{...}}, \"seed\": 7, \"tree\": {{\"goal\": \"min\", \"budget\": 20, \"calls\": 3, \"nodes\": [{{\"id\": 0, \"parent\": null, \"k\": null, \"design\": \"...\", \"score\": 1.5, \"status\": \"ok\", \"change\": \"...\", \"n_exp\": 2}}, ...]}}}}
+
+and writes one line back: the id of the node to continue, or `null` to stop. Flush the output after every reply. The reply may depend only on that line (take randomness from `seed`), or recorded rounds cannot be replayed. A node with status `pending` is still running: it has no score and cannot be continued. `n_exp` is how often a node was continued already; failed attempts have no score. Use an interpreter or compiler that is installed here; a program may build itself in its command.
+
+Your policy is scored by replaying it over the attempts the search has recorded, which costs no evaluations. From this directory,
+
+    {check}
+
+prints that score: J, the mean relative improvement the policy finds minus a small cost per attempt it spends (higher is better), and `miss`, the share of its decisions the record could not answer. Replay only knows what was tried: a decision the record cannot answer is charged as a failed attempt. So a policy that merely stops early can score well without being better. Prefer a policy that uses the same attempts better, and say in your write-up what it does differently and why the record supports it.
+
+`{look}` shows the search's latest round as a tree (add a round number for an earlier one); `git log` and `git show` work on every attempt. `{REPORT_FILE}` (how the deployed version was chosen) and `git-dream.toml` (the search's configuration) are written by git-dream: read them, don't edit them."
+    )
 }

@@ -45,6 +45,10 @@ What the evidence says (docs/validation.md):
 - the `bandit` family (src/model.rs) learns which kind of move pays from measured outcomes. Its arms
   (`bandit`, `bandit_dream`, `bandit_extended`) beat `refine_best` on rugged, tie on smooth and deceptive.
   `benchmarks/score.rs` still scores the replay-based `adaptive_*` arms.
+- the policy is a tree on the branch `dream/<run>/policy` (`policy.json`, plus a program's files). A
+  policy-development agent (`[develop]`, src/engine.rs `develop`) searches that tree in the run
+  `<run>.policy`: candidates are commits, the score is replay J, deployment needs the held-out check.
+  If you are that agent, `$DREAM_PROMPT` says so and gives the scoring command.
 - attempts can run at once (`[explore] parallel`, src/engine.rs `search`): one thread chooses and
   commits, each attempt's thread runs agent and evaluator in its own worktree. `benchmarks/compare.rs`
   stays on one core because `meta/eval-speed.sh` times it; `benchmarks/hashgrid.rs` uses every core.

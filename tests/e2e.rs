@@ -244,7 +244,9 @@ done
         String::from_utf8_lossy(&o.stdout).into_owned()
     };
     assert!(run(&["status"]).contains("r01"));
-    assert!(run(&["show", "1"]).contains("<- promoted"));
+    // the tree is drawn by git: one line per attempt, the promoted one carries the round's best ref
+    let shown = run(&["show", "1"]);
+    assert!(shown.contains("(refs/dream/main/r01/best)") && shown.contains("dream(main r1): root") && shown.lines().filter(|l| l.contains(" ok ")).count() >= 2, "{shown}");
     assert!(run(&["replay", "first_k:k=2", "-v"]).contains("first_k(k=2)"));
     assert!(run(&["policies"]).contains("repair"));
     std::fs::remove_file(r.0.join(".git-dream.toml")).unwrap();
@@ -252,25 +254,27 @@ done
     assert!(std::fs::read_to_string(r.0.join(".git-dream.toml")).unwrap().contains("kind = \"command\""));
 }
 
-fn loose_objects(dir: &Path) -> usize {
-    git(dir, &["count-objects", "-v"]).lines().find_map(|l| l.strip_prefix("count: ")).unwrap().parse().unwrap()
+fn packs(dir: &Path) -> usize {
+    std::fs::read_dir(dir.join(".git/objects/pack")).unwrap().filter(|f| f.as_ref().unwrap().path().extension().is_some_and(|x| x == "pack")).count()
 }
 
+/// Packing is git's: after a round git-dream runs `git maintenance run --auto`,
+/// so attempts are packed when git's own thresholds say so.
 #[test]
-fn rounds_are_packed() {
+fn git_packs_attempts_by_its_own_rules() {
+    // an older configuration's [storage] section is accepted and ignored
     let r = repo("toy-space", "pack", |s| s.replace("budget = 25", "budget = 6") + "\n[storage]\ngc_every = 2\n");
+    open(&r, None).rounds(1, false, None, None, None).unwrap();
+    assert_eq!(packs(&r.0), 0, "git's default threshold is far away");
+    // a repository that asks for it is packed after the round
+    let r = repo("toy-space", "pack-now", |s| s.replace("budget = 25", "budget = 6"));
+    git(&r.0, &["config", "maintenance.loose-objects.enabled", "true"]);
+    git(&r.0, &["config", "maintenance.loose-objects.auto", "1"]);
+    git(&r.0, &["config", "maintenance.autoDetach", "false"]);
     let e = open(&r, None);
     e.rounds(1, false, None, None, None).unwrap();
-    assert_eq!(loose_objects(&r.0), 0, "round 1 should be repacked");
-    let packs = || std::fs::read_dir(r.0.join(".git/objects/pack")).unwrap().filter(|f| f.as_ref().unwrap().path().extension().is_some_and(|x| x == "pack")).count();
-    assert!(packs() >= 1);
-    e.rounds(1, false, None, None, None).unwrap();
-    assert_eq!(loose_objects(&r.0), 0);
-    assert_eq!(packs(), 1, "round 2 should run git gc and merge the packs");
-    // switched off: attempts stay loose
-    let r = repo("toy-space", "nopack", |s| s.replace("budget = 25", "budget = 6") + "\n[storage]\nrepack = false\ngc_every = 0\n");
-    open(&r, None).rounds(1, false, None, None, None).unwrap();
-    assert!(loose_objects(&r.0) > 0);
+    assert!(packs(&r.0) >= 1);
+    assert_eq!(sig(&e.mem.load_tree("main", 1).unwrap().unwrap()).len(), 7, "nothing recorded is lost");
 }
 
 #[test]
@@ -643,4 +647,153 @@ fn agents_are_told_about_attempts_running_beside_them() {
     assert!(ctx.contains("## Already tried from this attempt\n- n001 ok 9: first idea") && ctx.contains("1 other agent started from this same attempt"), "{ctx}");
     let hist = history_context(&[&t], 0, 1, &Default::default());
     assert!(hist.contains("(1 attempt, best n001 9, 1 more without a result yet)") && !hist.contains("n002") && !hist.contains("n003"), "{hist}");
+}
+
+/// A stand-in for a policy-development agent: its first candidate is broken,
+/// its second is a program (continue the root once, then stop), later ones
+/// change nothing. It keeps what it was shown, for the test to read.
+fn developer(r: &Repo) -> String {
+    let dir = r.worktrees();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("developer.sh");
+    std::fs::write(&script, r#"n=$(cat "$OUT/count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$OUT/count"
+cp "$DREAM_CONTEXT" "$OUT/history-$n.md"
+printf '%s\n' "$DREAM_PROMPT" > "$OUT/prompt-$n.md"
+case $n in
+1) echo '{"family": "nonsense"}' > policy.json; echo "a family that does not exist" > "$DREAM_MESSAGE_FILE";;
+2) cat > once.sh <<'P'
+while read -r line; do
+  c=$(printf '%s' "$line" | sed -n 's/.*"calls":\([0-9]*\).*/\1/p')
+  if [ "$c" = 0 ]; then echo 0; else echo null; fi
+done
+P
+   echo '{"command": "sh once.sh", "params": {"k": 1}}' > policy.json
+   printf 'continue the root once, then stop\n\nNothing after the first attempt improved.\n' > "$DREAM_MESSAGE_FILE";;
+esac
+"#).unwrap();
+    let sh = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    format!("\n[develop]\ncommand = 'OUT=\"{}\" sh \"{}\"'\nattempts = 3\n", sh(&dir), sh(&script))
+}
+
+/// The policy-development agent rewrites the policy; its candidates are commits
+/// scored by replay (no evaluations), and the winner becomes the next version
+/// of the policy branch: a program that the next round is searched with.
+#[test]
+fn a_developed_policy_is_code_on_the_policy_branch() {
+    let eval = "command = 'if [ $DREAM_NODE = 0 ]; then echo 10; else echo 9; fi'";
+    let r = repo("toy-space", "develop", |s| s.replace("budget = 25", "budget = 5").replace("command = \"./bench.sh\"", eval).replace("[dream]\n", "[dream]\nholdout = 0\n") + "\n[policies]\ninitial = { family = \"refine_best\" }\n");
+    let cfg = r.0.join(".git-dream.toml");
+    std::fs::write(&cfg, std::fs::read_to_string(&cfg).unwrap() + &developer(&r)).unwrap();
+    let e = open(&r, None);
+    let trees = e.rounds(2, true, None, None, None).unwrap();
+    let evaluated = |t: &Tree| e.mem.notes_of(&t.nodes.iter().map(|n| n.sha.as_str()).collect::<Vec<_>>()).unwrap().values().filter(|n| n.get("seconds").is_some()).count();
+    assert_eq!((trees[0].calls(), evaluated(&trees[0])), (5, 6));
+
+    // the candidates: a run of their own, each a commit that starts from the deployed policy's commit
+    let cands = e.mem.load_tree("main.policy", 1).unwrap().unwrap();
+    assert_eq!(cands.nodes.iter().map(|n| n.status.as_str()).collect::<Vec<_>>(), ["ok", "fail", "ok", "noop"]);
+    assert!(cands.nodes[2].score > cands.root().score, "stopping after the only improvement scores higher on replay");
+    assert_eq!(git(&r.0, &["rev-parse", &format!("{}^", cands.root().sha)]), git(&r.0, &["rev-parse", "dream/main/policy-r01"]));
+    assert!(e.mem.notes_of(&[cands.nodes[1].sha.as_str()]).unwrap()[&cands.nodes[1].sha]["stderr"].as_str().unwrap().contains("unknown policy family"));
+    assert_eq!(e.mem.runs().unwrap(), vec!["main"], "candidate policies are not a search of the task");
+
+    // the winner is the policy now: its files are the policy branch's tree, the candidate its second parent
+    let doc = e.mem.policy_doc("main", Some(2)).unwrap();
+    assert_eq!((doc["method"].as_str(), doc["policy"]["command"].as_str()), (Some("develop"), Some("sh once.sh")));
+    assert!(git(&r.0, &["show", "dream/main/policy:once.sh"]).contains("calls"));
+    assert!(git(&r.0, &["show", "dream/main/policy:policy.json"]).contains("sh once.sh"));
+    let parents = git(&r.0, &["rev-list", "--parents", "-n", "1", "dream/main/policy"]);
+    let parents: Vec<&str> = parents.split(' ').collect();
+    assert_eq!((parents[1], parents[2]), (git(&r.0, &["rev-parse", "dream/main/policy-r01"]).as_str(), cands.nodes[2].sha.as_str()));
+    assert_eq!(git(&r.0, &["log", "--first-parent", "--format=%H", "dream/main/policy"]).lines().count(), 2, "one version per round");
+
+    // round 2 was searched by that program, checked out from its commit
+    assert_eq!(trees[1].calls(), 1);
+    assert!(trees[1].policy.starts_with("program@") && trees[1].policy.ends_with("(k=1)"), "{}", trees[1].policy);
+    check_exact_replay(&e);
+    // and the round can be reopened with it (the program says stop again)
+    assert_eq!(open(&r, None).extend(Some(2)).unwrap().calls(), 1);
+
+    // the developer read every earlier candidate with its measured result, and how to check its own
+    let out = |f: &str| std::fs::read_to_string(r.worktrees().join(f)).unwrap();
+    let hist = out("history-3.md");
+    for want in ["# Search history: run main.policy", "fail (the policy does not run)", "unknown policy family \"nonsense\"", "> Nothing after the first attempt improved."] {
+        assert!(hist.contains(want), "history lacks {want:?}:\n{hist}");
+    }
+    assert!(out("prompt-1.md").contains("replay --dir \"$PWD\" --run main") && out("prompt-1.md").contains("continue attempt n000"));
+
+    // a second dream: the developer is told what became of the earlier winner; with nothing better, the policy stays
+    let before = git(&r.0, &["rev-parse", "dream/main/policy"]);
+    e.dream(None, None, None, None, true).unwrap();
+    assert_eq!(git(&r.0, &["rev-parse", "dream/main/policy"]), before);
+    assert!(out("history-4.md").contains("· deployed") && out("history-4.md").contains("## Round 2"));
+
+    // the binary: score a policy directory, see the candidates, clean up both runs
+    let run = |args: &[&str]| {
+        let o = r.bin().args(args).output().unwrap();
+        assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let dir = r.worktrees().join("mine");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("policy.json"), r#"{"family": "ucb", "params": {"c": 0.1}}"#).unwrap();
+    let scored = run(&["replay", "--dir", &dir.to_string_lossy()]);
+    assert!(scored.contains("J=") && scored.contains("ucb(c=0.1)") && scored.contains("2 recorded rounds"), "{scored}");
+    std::fs::write(dir.join("policy.json"), r#"{"command": "echo not-a-node"}"#).unwrap();
+    let o = r.bin().args(["replay", "--dir", &dir.to_string_lossy()]).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("the policy does not run"));
+    assert!(run(&["status"]).contains("policy development: 2 dreams"));
+    assert!(run(&["show", "--run", "main.policy", "1"]).contains("root the deployed policy"));
+    let o = r.bin().args(["run", "--run", "main.policy"]).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("holds the candidate policies"));
+    run(&["clean", "--run", "main", "--yes"]);
+    assert_eq!(git(&r.0, &["for-each-ref", "refs/dream", "refs/heads/dream", "refs/tags/dream"]), "");
+}
+
+/// A candidate that wins on the rounds it was scored on must also do better
+/// on the newest round, which it was not scored on. Otherwise the policy stays.
+#[test]
+fn held_out_rounds_decide_whether_a_developed_policy_is_deployed() {
+    // round 2 rewards going on: stopping after one attempt is only right for round 1
+    let eval = "command = 'if [ $DREAM_NODE = 0 ]; then echo 10; elif [ $DREAM_ROUND = 2 ] && [ $DREAM_NODE -ge 2 ]; then echo 1; else echo 9; fi'";
+    let r = repo("toy-space", "develop-gate", |s| s.replace("budget = 25", "budget = 5").replace("command = \"./bench.sh\"", eval) + "\n[policies]\ninitial = { family = \"refine_best\" }\n");
+    let cfg = r.0.join(".git-dream.toml");
+    std::fs::write(&cfg, std::fs::read_to_string(&cfg).unwrap() + &developer(&r)).unwrap();
+    let e = open(&r, None);
+    // one recorded round is not enough to set one aside: no candidates are written yet
+    e.rounds(2, true, None, None, None).unwrap();
+    assert!(e.mem.rounds("main.policy").unwrap().is_empty());
+    e.dream(None, None, None, None, true).unwrap();
+    let cands = e.mem.load_tree("main.policy", 1).unwrap().unwrap();
+    assert!(cands.nodes[2].score > cands.root().score, "it wins on round 1");
+    let note = e.mem.read_note(&cands.nodes[2].sha).unwrap();
+    assert_eq!(note["deployment"]["accepted"], false);
+    assert!(note["deployment"]["validation"]["candidate_J"].as_f64().unwrap() < note["deployment"]["validation"]["current_J"].as_f64().unwrap());
+    assert_eq!(e.deployed(None).unwrap().unwrap().family, "refine_best");
+    assert!(e.mem.policy_doc("main", Some(3)).is_none());
+    e.dream(None, None, None, None, true).unwrap();
+    assert!(std::fs::read_to_string(r.worktrees().join("history-4.md")).unwrap().contains("not deployed: no better on the held-out rounds"));
+}
+
+/// The yield model counts what each attempt did in its own tree, so it learns
+/// from any recorded run: with history = "all" a new run starts from what the
+/// earlier ones measured, even where replay could not pool them.
+#[test]
+fn a_new_run_starts_from_what_other_runs_measured() {
+    let r = repo("toy-space", "pool-yield", |s| s.replace("budget = 25", "budget = 6"));
+    open(&r, Some("a")).rounds(1, true, None, None, None).unwrap();
+    assert_eq!(open(&r, Some("a")).mem.policy_doc("a", Some(1)).unwrap()["why"], "initial policy");
+    // another objective: its scores do not compare with run a's, its moves still count
+    let cfg = r.0.join(".git-dream.toml");
+    std::fs::write(&cfg, std::fs::read_to_string(&cfg).unwrap().replace("goal = \"min\"", "goal = \"max\"").replace("[dream]\n", "[dream]\nhistory = \"all\"\n")).unwrap();
+    let e = open(&r, Some("b"));
+    let t = e.run(1, true, None, None, None, true, false).unwrap().remove(0);
+    let doc = e.mem.policy_doc("b", Some(1)).unwrap();
+    assert_eq!(doc["method"], "model");
+    let weight: f64 = doc["model"].as_array().unwrap().iter().map(|m| m["weight"].as_f64().unwrap()).sum();
+    assert!(weight > 5.0 && weight <= 6.0, "run a's 6 attempts: {weight}");
+    assert!(t.policy.contains("n_best0="), "{}", t.policy);
+    check_exact_replay(&e);
+    let err = e.replay(&e.current_policy().unwrap(), None, None).unwrap_err();
+    assert!(format!("{err:#}").contains("incompatible agent/evaluator"), "replay still refuses to pool them");
 }
