@@ -1,15 +1,21 @@
-//! git-dream: Git-native experimental search with replay diagnostics.
+//! git-dream: a search that gets better at how it searches without paying for
+//! more evaluations (Dream-RSI), built from git's own tooling: attempts and
+//! policies are commits, searches are refs, checkouts are worktrees.
 //!
 //! * [`tree`]     discovery trees (what a round produces, what policies see)
 //! * [`policies`] exploration policies (built-in families + external commands)
 //! * [`agents`]   discovery agents (parameter space / command) and the evaluator
 //! * [`memory`]   the git layout: commits, trailers, notes, hidden refs
+//! * [`model`]    the yield model: what dreaming learns from recorded attempts
 //! * [`sim`]      running policies against worlds; replay and dreaming
 //! * [`engine`]   configuration, the live world and the round loop
+//! * [`par`]      running independent jobs at once, results in job order
 
 pub mod agents;
 pub mod engine;
 pub mod memory;
+pub mod model;
+pub mod par;
 pub mod policies;
 pub mod rng;
 pub mod sim;

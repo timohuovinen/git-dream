@@ -1,0 +1,22 @@
+gap to the best design after 40 evaluations (mean, 95% interval over 500 seeds, noise 0.06):
+   1 x  40  refine_best          29.26% ± 1.99
+   1 x  40  repair               21.51% ± 1.71
+   1 x  40  bandit               22.35% ± 2.03
+   8 x   5  refine_best         115.15% ± 6.03
+   8 x   5  repair              115.06% ± 6.04
+   8 x   5  bandit              116.50% ± 6.02
+   8 x   5  bandit_dream        100.20% ± 6.21
+  40 x   1  refine_best         205.77% ± 5.96
+  40 x   1  repair              205.77% ± 5.96
+  40 x   1  bandit              205.77% ± 5.96
+  40 x   1  bandit_dream        205.77% ± 5.96
+attempts at once, one round (a wave takes the time of one attempt; 40 evaluations unless the row says fewer waves of 1):
+   10 waves of  4  refine_best   30.34% ± 2.07
+   10 waves of  4  bandit        24.84% ± 1.95
+   10 waves of  1  bandit        95.09% ± 5.50
+    5 waves of  8  refine_best   33.69% ± 2.23
+    5 waves of  8  bandit        27.72% ± 2.24
+    5 waves of  1  bandit       136.71% ± 5.13
+    3 waves of 16  refine_best   42.28% ± 3.01
+    3 waves of 16  bandit        33.05% ± 2.58
+    2 waves of  1  bandit       177.30% ± 5.18

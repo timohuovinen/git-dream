@@ -8,9 +8,14 @@
 //! refs/dream/<run>/rNN/nNNN          one commit per attempt (hidden refs = the discovery tree)
 //! refs/dream/<run>/rNN/best          attempt promoted at the end of round NN
 //! refs/heads/dream/<run>/best        branch -> latest promoted attempt (check it out / merge it)
-//! refs/heads/dream/<run>/policy      branch: one commit per round with the policy it used
-//! refs/tags/dream/<run>/policy-rNN   tag of each policy version
+//! refs/heads/dream/<run>/policy      branch: the exploration policy, one commit per version. Its tree is the
+//!                                    policy: policy.json (a built-in family and its parameters, or the command
+//!                                    that starts a program) and that program's files; dream.json says how the
+//!                                    version was chosen
+//! refs/tags/dream/<run>/policy-rNN   tag: the policy round NN used
 //! refs/notes/dream                   evaluator output per attempt (git notes)
+//! refs/dream/<run>.policy/...        the same layout again, one level up: the candidate policies a
+//!                                    policy-development agent wrote, each a commit scored by replay
 //! ```
 //!
 //! An attempt commit's parent is the attempt it continued; a round's root commit
@@ -20,6 +25,7 @@
 //! every tree.
 
 use crate::tree::{Goal, Node, Tree, NOOP, OK};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -29,12 +35,29 @@ use std::process::{Command, Stdio};
 
 pub const REFSPECS: [&str; 4] = ["refs/dream/*:refs/dream/*", "refs/heads/dream/*:refs/heads/dream/*", "refs/tags/dream/*:refs/tags/dream/*", "refs/notes/dream:refs/notes/dream"];
 
+/// The policy, in the tree of a policy commit.
+pub const POLICY_FILE: &str = "policy.json";
+/// How that version was chosen: written by git-dream, not part of the policy.
+pub const REPORT_FILE: &str = "dream.json";
+
+/// The run that holds the candidate policies written for `run`.
+pub fn policy_run(run: &str) -> String {
+    format!("{run}.policy")
+}
+
+pub fn is_policy_run(run: &str) -> bool {
+    run.ends_with(".policy")
+}
+
+#[derive(Clone)]
 pub struct Memory {
     pub cwd: PathBuf,
     pub top: PathBuf,
     pub common: PathBuf,
-    /// `.git/dream/`: scratch worktrees and temporary files.
+    /// `.git/dream/`: temporary files.
     pub state: PathBuf,
+    /// This repository's scratch worktrees (see [`worktree_root`]).
+    pub worktrees: PathBuf,
     env: Vec<(String, String)>,
 }
 
@@ -44,6 +67,23 @@ pub fn check_run(run: &str) -> Result<()> {
         bail!("bad run name {run:?} (letters, digits, . _ -)");
     }
     Ok(())
+}
+
+/// Where a repository's scratch worktrees live: `$GIT_DREAM_WORKTREES/<repo>`,
+/// else `<user cache directory>/git-dream/<repo>`. Never under `.git`: coding
+/// agents refuse to edit files there (Claude Code calls them sensitive files),
+/// so an agent working in `.git/dream/wt` cannot change the code. `<repo>` is
+/// the directory's name plus a hash of its path. Without a home directory the
+/// old place, `.git/dream/wt`, is all that is left.
+fn worktree_root(common: &Path) -> PathBuf {
+    let dir = |var: &str| std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let name = common.parent().and_then(Path::file_name).map_or("repo".into(), |n| n.to_string_lossy().into_owned());
+    let key = format!("{name}-{:016x}", crate::rng::hash(&common.to_string_lossy()));
+    let base = dir("GIT_DREAM_WORKTREES")
+        .or_else(|| dir("XDG_CACHE_HOME").map(|d| d.join("git-dream")))
+        .or_else(|| dir("LOCALAPPDATA").map(|d| d.join("git-dream")))
+        .or_else(|| dir("HOME").map(|d| d.join(".cache").join("git-dream")));
+    base.map_or_else(|| common.join("dream").join("wt"), |b| b.join(key))
 }
 
 fn fmt_score(s: Option<f64>) -> String {
@@ -56,10 +96,11 @@ fn fmt_score(s: Option<f64>) -> String {
 
 impl Memory {
     pub fn open(cwd: &Path) -> Result<Memory> {
-        let mut m = Memory { cwd: cwd.into(), top: PathBuf::new(), common: PathBuf::new(), state: PathBuf::new(), env: vec![("GIT_TERMINAL_PROMPT".into(), "0".into())] };
+        let mut m = Memory { cwd: cwd.into(), top: PathBuf::new(), common: PathBuf::new(), state: PathBuf::new(), worktrees: PathBuf::new(), env: vec![("GIT_TERMINAL_PROMPT".into(), "0".into())] };
         m.top = PathBuf::from(m.git(&["rev-parse", "--show-toplevel"]).context("not inside a git repository")?);
         m.common = PathBuf::from(m.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
         m.state = m.common.join("dream");
+        m.worktrees = worktree_root(&m.common);
         if m.run(&["var", "GIT_COMMITTER_IDENT"], None, None, &[]).is_err() {
             for k in ["AUTHOR", "COMMITTER"] {
                 m.env.push((format!("GIT_{k}_NAME"), "git-dream".into()));
@@ -114,7 +155,9 @@ impl Memory {
     /// Tree of commit/tree `base` (None = empty) with `files` (path, text) added or replaced.
     pub fn tree_with_files(&self, base: Option<&str>, files: &[(String, String)]) -> Result<String> {
         std::fs::create_dir_all(&self.state)?;
-        let idx = self.state.join(format!("index-{}", std::process::id()));
+        // unique per call: attempts are built on several threads at once
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let idx = self.state.join(format!("index-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let env = vec![("GIT_INDEX_FILE".to_string(), idx.to_string_lossy().into_owned())];
         let r = (|| {
             match base {
@@ -131,9 +174,9 @@ impl Memory {
         r
     }
 
-    pub fn commit(&self, tree: &str, parent: Option<&str>, message: &str) -> Result<String> {
+    pub fn commit(&self, tree: &str, parents: &[&str], message: &str) -> Result<String> {
         let mut args = vec!["commit-tree", tree, "-F", "-"];
-        if let Some(p) = parent {
+        for p in parents {
             args.extend(["-p", p]);
         }
         self.git_in(&args, message)
@@ -185,8 +228,9 @@ impl Memory {
         Ok(self.git(&["for-each-ref", "--format=%(refname)", prefix])?.lines().map(String::from).collect())
     }
 
+    /// The runs of this repository (not the `<run>.policy` runs that hold their candidate policies).
     pub fn runs(&self) -> Result<Vec<String>> {
-        let mut v: Vec<String> = self.refnames("refs/dream/")?.iter().filter_map(|r| r.strip_prefix("refs/dream/")?.strip_suffix("/base").map(String::from)).filter(|r| !r.contains('/')).collect();
+        let mut v: Vec<String> = self.refnames("refs/dream/")?.iter().filter_map(|r| r.strip_prefix("refs/dream/")?.strip_suffix("/base").map(String::from)).filter(|r| !r.contains('/') && !is_policy_run(r)).collect();
         v.sort();
         Ok(v)
     }
@@ -236,6 +280,11 @@ impl Memory {
             ("Status", n.status.clone()),
             ("Score", fmt_score(n.score)),
         ];
+        // Only when the result arrived after later attempts had been chosen
+        // (attempts running at once): which choices were made without it.
+        if n.seen > n.id + 1 {
+            trailers.push(("Seen", n.seen.to_string()));
+        }
         // How the evaluation failed (measured, not a diagnosis: the evidence is in the note).
         if n.status != OK && n.status != NOOP {
             if let Some(f) = note.and_then(crate::agents::failure) {
@@ -244,7 +293,7 @@ impl Memory {
         }
         let tr: Vec<String> = trailers.iter().map(|(k, v)| format!("Dream-{k}: {v}")).collect();
         let msg = format!("{subject}\n\n{}\n\n{}\n", body.join("\n"), tr.join("\n"));
-        let sha = self.commit(tree, Some(parent_sha), &msg)?;
+        let sha = self.commit(tree, &[parent_sha], &msg)?;
         self.set_ref(&format!("refs/dream/{}/r{:02}/n{:03}", t.run, t.round, n.id), &sha)?;
         if let Some(nt) = note {
             self.note(&sha, nt)?;
@@ -259,7 +308,10 @@ impl Memory {
         if shas.is_empty() {
             return Ok(None);
         }
-        let log = self.git_in(&["log", "--no-walk=unsorted", "--stdin", "--format=%H%x1f%B%x1e"], &(shas.join("\n") + "\n"))?;
+        // The outcome is read with git's own trailer parser: only the last
+        // paragraph of a message is its trailers, so a line of an agent's
+        // write-up that looks like one stays text.
+        let log = self.git_in(&["log", "--no-walk=unsorted", "--stdin", "--format=%H%x1f%(trailers:only,unfold)%x1f%B%x1e"], &(shas.join("\n") + "\n"))?;
         let mut nodes = vec![];
         let mut meta: HashMap<String, String> = HashMap::new();
         for rec in log.split('\x1e') {
@@ -267,8 +319,10 @@ impl Memory {
             if rec.is_empty() {
                 continue;
             }
-            let (sha, body) = rec.split_once('\x1f').ok_or_else(|| anyhow!("bad log record"))?;
-            let tr: HashMap<String, String> = body.lines().filter_map(|l| l.strip_prefix("Dream-")?.split_once(':')).map(|(k, v)| (k.to_string(), v.trim().to_string())).collect();
+            let mut fields = rec.splitn(3, '\x1f');
+            let (Some(sha), Some(trailers), Some(body)) = (fields.next(), fields.next(), fields.next()) else { bail!("bad log record") };
+            let body = body.trim();
+            let tr: HashMap<String, String> = trailers.lines().filter_map(|l| l.strip_prefix("Dream-")?.split_once(':')).map(|(k, v)| (k.to_string(), v.trim().to_string())).collect();
             let get = |k: &str| tr.get(k).cloned().ok_or_else(|| anyhow!("commit {sha} lacks Dream-{k}"));
             let subject = body.lines().next().unwrap_or("");
             // A multi-line change sits between the design/result paragraph and the trailers.
@@ -292,8 +346,12 @@ impl Memory {
                 change,
             );
             n.sha = sha.trim().to_string();
+            n.seen = num("Seen")?.unwrap_or(0);
+            // an extended round records a larger budget on its later attempts: keep the newest
+            if nodes.iter().all(|m: &Node| m.id < n.id) {
+                meta = tr;
+            }
             nodes.push(n);
-            meta = tr;
         }
         nodes.sort_by_key(|n| n.id);
         if nodes.iter().enumerate().any(|(i, n)| n.id != i) {
@@ -327,46 +385,88 @@ impl Memory {
     }
 
     // ---- policies -------------------------------------------------------------------
-    pub fn commit_policy(&self, run: &str, round: u32, doc: &Value, files: &[(String, String)]) -> Result<String> {
+    /// A new version of the policy of `run`, for `round`: a commit on the policy
+    /// branch whose tree is the policy. `spec` becomes `policy.json`, `report`
+    /// (how it was chosen) `dream.json`, on top of `tree`: the tree a
+    /// policy-development attempt left (`from`, recorded as a second parent, so
+    /// `git log --graph` shows where the version came from), else the previous
+    /// version's tree, so a policy program's files stay.
+    pub fn commit_policy(&self, run: &str, round: u32, spec: &Value, report: &Value, files: &[(String, String)], from: Option<&str>) -> Result<String> {
         let branch = format!("refs/heads/dream/{run}/policy");
         let parent = self.rev(&branch);
-        let mut all = vec![("policy.json".to_string(), serde_json::to_string_pretty(doc)? + "\n")];
+        let mut all = vec![(POLICY_FILE.to_string(), serde_json::to_string_pretty(spec)? + "\n"), (REPORT_FILE.to_string(), serde_json::to_string_pretty(report)? + "\n")];
         all.extend(files.iter().cloned());
-        let tree = self.tree_with_files(None, &all)?;
-        let repr = doc["repr"].as_str().unwrap_or("");
-        let why = doc["why"].as_str().unwrap_or("");
+        let tree = self.tree_with_files(from.or(parent.as_deref()), &all)?;
+        let repr = report["repr"].as_str().unwrap_or("");
+        let why = report["why"].as_str().unwrap_or("");
         let msg = format!("policy({run} r{round:02}): {repr}\n\n{why}\n\nDream-Run: {run}\nDream-Round: {round}\nDream-Policy: {repr}\n");
-        let sha = self.commit(&tree, parent.as_deref(), &msg)?;
+        let parents: Vec<&str> = parent.as_deref().into_iter().chain(from).collect();
+        let sha = self.commit(&tree, &parents, &msg)?;
         self.set_ref(&branch, &sha)?;
         self.set_ref(&format!("refs/tags/dream/{run}/policy-r{round:02}"), &sha)?;
         Ok(sha)
     }
 
+    /// The policy commit of `run`: the one `round` used, or the newest.
+    pub fn policy_commit(&self, run: &str, round: Option<u32>) -> Option<String> {
+        self.rev(&match round {
+            None => format!("refs/heads/dream/{run}/policy^{{commit}}"),
+            Some(n) => format!("refs/tags/dream/{run}/policy-r{n:02}^{{commit}}"),
+        })
+    }
+
+    /// How a policy version was chosen (`dream.json`), with the policy itself
+    /// (`policy.json`) as its "policy". Versions written before the two were
+    /// separate files hold both in `policy.json`.
     pub fn policy_doc(&self, run: &str, round: Option<u32>) -> Option<Value> {
-        let r = match round {
-            None => format!("refs/heads/dream/{run}/policy"),
-            Some(n) => format!("refs/tags/dream/{run}/policy-r{n:02}"),
-        };
-        self.git(&["show", &format!("{r}:policy.json")]).ok().and_then(|s| serde_json::from_str(&s).ok())
+        let commit = self.policy_commit(run, round)?;
+        let file = |name: &str| self.git(&["show", &format!("{commit}:{name}")]).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let spec = file(POLICY_FILE)?;
+        if spec.get("policy").is_some() {
+            return Some(spec);
+        }
+        let mut doc = file(REPORT_FILE).filter(Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+        doc["policy"] = spec;
+        Some(doc)
     }
 
     // ---- scratch worktree ----------------------------------------------------------------
-    /// A private worktree (inside .git/dream/) where attempts are materialised,
+    /// A private worktree (outside the repository) where attempts are materialised,
     /// built and evaluated. Ignored build outputs survive between attempts.
-    pub fn worktree(&self, run: &str) -> Result<PathBuf> {
-        let path = self.state.join("wt").join(run);
+    /// Attempts running at once each use their own (`lane` 0, 1, ...).
+    pub fn worktree(&self, run: &str, lane: usize) -> Result<PathBuf> {
+        let path = self.worktree_path(run, lane);
+        self.worktree_at(&path, || self.base(run))?;
+        Ok(path)
+    }
+
+    /// The policy version `commit` of `run`, checked out where its program can
+    /// be started: one more scratch worktree, `wt/<run>.policy@live`.
+    pub fn policy_checkout(&self, run: &str, commit: &str) -> Result<PathBuf> {
+        let path = self.worktrees.join(format!("{}@live", policy_run(run)));
+        self.worktree_at(&path, || Ok(commit.to_string()))?;
+        self.materialize(&path, &self.tree_of(commit)?)?;
+        Ok(path)
+    }
+
+    /// Make sure `path` is a (detached) worktree of this repository; a new one starts at `commit`.
+    fn worktree_at(&self, path: &Path, commit: impl FnOnce() -> Result<String>) -> Result<()> {
         let listed = self.git(&["worktree", "list", "--porcelain"])?;
         let want = format!("worktree {}", path.display());
         if !listed.lines().any(|l| l == want) {
             if path.exists() {
-                std::fs::remove_dir_all(&path)?;
+                std::fs::remove_dir_all(path)?;
             }
             self.git(&["worktree", "prune"])?;
             std::fs::create_dir_all(path.parent().unwrap())?;
-            let base = self.base(run)?;
-            self.git(&["worktree", "add", "-q", "--detach", &path.to_string_lossy(), &base])?;
+            self.git(&["worktree", "add", "-q", "--detach", &path.to_string_lossy(), &commit()?])?;
         }
-        Ok(path)
+        Ok(())
+    }
+
+    /// `wt/<run>` for lane 0, `wt/<run>@<lane>` for the others ('@' cannot occur in a run name).
+    fn worktree_path(&self, run: &str, lane: usize) -> PathBuf {
+        self.worktrees.join(if lane == 0 { run.to_string() } else { format!("{run}@{lane}") })
     }
 
     /// Make worktree `wt` (index + files) exactly `tree`; keep ignored files.
@@ -383,22 +483,19 @@ impl Memory {
     }
 
     // ---- maintenance -------------------------------------------------------------------------
-    /// Move loose objects into one new pack (deltas within it) and delete them.
-    /// Plumbing never triggers auto-gc, so without this every attempt keeps a
-    /// full compressed copy of each file it changed.
-    pub fn repack(&self) -> Result<()> {
-        self.git(&["repack", "-d", "-q"])?;
+    /// Attempts are written with plumbing (hash-object, commit-tree, update-ref),
+    /// which never triggers git's housekeeping, so every version of a file would
+    /// stay a full loose object. Ask git to do what it does after a commit:
+    /// pack once its own thresholds are reached (`gc.auto`, `maintenance.*`).
+    pub fn maintain(&self) -> Result<()> {
+        self.git(&["maintenance", "run", "--auto", "--quiet"])?;
         Ok(())
     }
 
-    /// Full `git gc`: merges the per-round packs (deltas across rounds).
-    pub fn gc(&self) -> Result<()> {
-        self.git(&["gc", "-q"])?;
-        Ok(())
-    }
-
+    /// Delete every ref and scratch worktree of `run`, and of the run holding its candidate policies.
     pub fn delete_run(&self, run: &str) -> Result<usize> {
         check_run(run)?;
+        let nested = if is_policy_run(run) { 0 } else { self.delete_run(&policy_run(run))? };
         let mut refs = vec![];
         for pre in [format!("refs/dream/{run}/"), format!("refs/heads/dream/{run}/"), format!("refs/tags/dream/{run}/")] {
             refs.extend(self.refnames(&pre)?);
@@ -407,12 +504,16 @@ impl Memory {
             let input: String = refs.iter().map(|r| format!("delete {r}\n")).collect();
             self.git_in(&["update-ref", "--stdin"], &input)?;
         }
-        let path = self.state.join("wt").join(run);
-        if path.exists() {
+        let mut paths = vec![self.worktree_path(run, 0)];
+        if let Ok(dir) = std::fs::read_dir(&self.worktrees) {
+            let lanes = format!("{run}@");
+            paths.extend(dir.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&lanes)).map(|e| e.path()));
+        }
+        for path in paths.iter().filter(|p| p.exists()) {
             let _ = self.git(&["worktree", "remove", "--force", &path.to_string_lossy()]);
-            let _ = std::fs::remove_dir_all(&path);
+            let _ = std::fs::remove_dir_all(path);
         }
         self.git(&["worktree", "prune"])?;
-        Ok(refs.len())
+        Ok(refs.len() + nested)
     }
 }

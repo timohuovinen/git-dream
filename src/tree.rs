@@ -11,6 +11,9 @@ pub const FAIL: &str = "fail";
 pub const NOOP: &str = "noop";
 /// Replay only: the outcome is not in recorded history.
 pub const MISS: &str = "miss";
+/// The attempt has been started and has no result yet: it is running now (several
+/// attempts run at once with `[explore] parallel`), or its run was killed.
+pub const PENDING: &str = "pending";
 
 /// Failed attempts a policy may still continue ("full" = hashbench's name for an overflowing table).
 pub fn repairable(status: &str) -> bool {
@@ -67,11 +70,26 @@ pub struct Node {
     pub sha: String,
     /// Replay: id of the matching recorded node.
     pub rec: Option<usize>,
+    /// With attempts running at once, a result can arrive after later attempts
+    /// were chosen: this is the id of the first attempt chosen knowing it
+    /// (0 = the next one, as when attempts run one at a time). See [`Node::visible`].
+    pub seen: usize,
 }
 
 impl Node {
     pub fn new(id: usize, parent: Option<usize>, k: Option<usize>, design: impl Into<String>, score: Option<f64>, status: &str, change: impl Into<String>) -> Node {
-        Node { id, parent, k, design: design.into(), score, status: status.into(), change: change.into(), n_exp: 0, sha: String::new(), rec: None }
+        Node { id, parent, k, design: design.into(), score, status: status.into(), change: change.into(), n_exp: 0, sha: String::new(), rec: None, seen: 0 }
+    }
+
+    /// Placeholder for an attempt that has been started: what a policy sees of
+    /// it while it runs (it was chosen, it has no result).
+    pub fn pending(id: usize, parent: usize, k: usize) -> Node {
+        Node::new(id, Some(parent), Some(k), format!("?n{id:03}"), None, PENDING, "")
+    }
+
+    /// Id of the first attempt that was chosen knowing this one's result.
+    pub fn visible(&self) -> usize {
+        self.seen.max(self.id + 1)
     }
 }
 
@@ -134,6 +152,23 @@ impl Tree {
         self.best_trace.push(b);
     }
 
+    /// Replace the placeholder of a started attempt by its result. The count of
+    /// its continuations is kept; the best-score trace is rebuilt in id order.
+    pub fn resolve(&mut self, mut n: Node) {
+        let id = n.id;
+        n.n_exp = self.nodes[id].n_exp;
+        self.nodes[id] = n;
+        let mut best: Option<f64> = None;
+        for (i, n) in self.nodes.iter().enumerate() {
+            if let Some(s) = n.score {
+                if best.is_none_or(|b| self.goal.cost(s) < self.goal.cost(b)) {
+                    best = Some(s);
+                }
+            }
+            self.best_trace[i] = best;
+        }
+    }
+
     /// Calls since the best score last improved by a relative margin > eps.
     pub fn stalled(&self, eps: f64) -> usize {
         let mut r = self.best_trace[0];
@@ -177,5 +212,28 @@ mod tests {
         assert_eq!(t.best().unwrap().id, 1);
         assert!((t.rel(12.0, 10.0) - 0.2).abs() < 1e-12);
         assert_eq!(t.stalled(0.0), 1);
+    }
+
+    #[test]
+    fn pending_attempts_resolve_in_place() {
+        let mut a = Tree::new("r", 1, 10, Goal::Min, "");
+        a.set_root(Node::new(0, None, None, "a", Some(10.0), OK, ""));
+        let mut b = a.clone();
+        // one at a time
+        a.add(Node::new(1, Some(0), Some(0), "b", Some(8.0), OK, ""));
+        a.add(Node::new(2, Some(0), Some(1), "c", Some(9.0), OK, ""));
+        // both started, then the second finishes first
+        b.add(Node::pending(1, 0, 0));
+        b.add(Node::pending(2, 0, 1));
+        assert!(b.best().unwrap().id == 0 && b.calls() == 2 && b.nodes[1].status == PENDING);
+        b.nodes[2].n_exp = 3;
+        b.resolve(Node::new(2, Some(0), Some(1), "c", Some(9.0), OK, ""));
+        assert_eq!(b.best_trace, vec![Some(10.0), Some(10.0), Some(9.0)]);
+        assert_eq!(b.nodes[2].n_exp, 3);
+        b.nodes[2].n_exp = 0;
+        b.resolve(Node::new(1, Some(0), Some(0), "b", Some(8.0), OK, ""));
+        assert_eq!(b.best_trace, a.best_trace);
+        assert_eq!(b.nodes, a.nodes);
+        assert_eq!(Node::pending(4, 1, 0).visible(), 5);
     }
 }

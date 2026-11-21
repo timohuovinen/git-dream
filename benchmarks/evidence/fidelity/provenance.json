@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-16",
+  "commands": {
+    "v1.jsonl": "cargo run --release --locked --example fidelity -- --reps 100 --out benchmarks/evidence/fidelity/v1",
+    "v1.txt": "cargo run --release --locked --example fidelity -- --summarize benchmarks/evidence/fidelity/v1.jsonl"
+  },
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "base_revision": "eaf71737b597f9ba3c27e8824787e452c08b0219",
+  "source_state": "uncommitted changes identified by the hashes below",
+  "sha256": {
+    "benchmarks/fidelity.rs": "d1bf8dea45c1bb8694511defb08ba50a3ea132f0f0b70e04bcad62d83cefbb4d",
+    "benchmarks/grid.rs": "8f3cd99fee07f6b99fb0bd0c2fd6a56b2c1a7783f6a44d7457f4fa74741b8134",
+    "examples/hashbench/evidence/oracle.jsonl": "970d6fdb72611e0cf23e4752aaf3642ba39f36d210ea49a372e75dd18ea04232",
+    "src/agents.rs": "09c9492c4d9ec014b506a9f30d05ff5ff369e4278a6a7ede10952811efa17009",
+    "src/policies.rs": "4f77289f2e50eab061091f21c61f995be960d25102ba1b962cd2d73262318720",
+    "src/model.rs": "7bdc672678683c4c8cb1290689064bdd22fcd8eb09dc547c596ae0e09bd1672f",
+    "src/sim.rs": "cf02d316fe25e55ab10ba5472d1e3e2954521c4f7def287b196ce651e7ef193f",
+    "src/tree.rs": "77daf4b5dd11ec1befda338dbe21fa7cc4d4503a90c24476dfb5e38fae44f0b2",
+    "src/rng.rs": "3731e1b4878a5275511db8a5cb2aa188503cce1ddfa5d550cd9f2b4b09ed9d5f",
+    "src/par.rs": "c5641c8709399d078382296d982f68fcc35174d17da5a12723c6f30a1dfb0509",
+    "Cargo.lock": "c4d2888ef209c3bf627c9c44f4ca60fac74d50eb5a82169c0305b2eaa4f6effa",
+    "benchmarks/evidence/fidelity/v1.jsonl": "861192a458d2dbbad0ac5197ff78b7cc816a6b0c8cc9a44650a3dfe1d1c46661",
+    "benchmarks/evidence/fidelity/v1.txt": "528be1412889d9bd2685532b5fce759854b7d80dd0d937f53fc99d055f295796"
+  }
+}

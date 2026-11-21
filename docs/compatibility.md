@@ -2,6 +2,56 @@
 
 These changes apply to the current source checkout. The archived hashbench experiments retain their original protocol; their reported results have not been regenerated with these safeguards.
 
+## The policy is a tree in git; policy development; packing and `show` are git's
+
+These follow from the tool's goal: improve the policy at no evaluation cost, with git's own tooling.
+
+- **Policy commits have a new layout.** `policy.json` on `dream/<run>/policy` is now the policy alone (`{"family", "params"}` or `{"command", "params"}`), and what was beside it in that file (the yield table, the replay ranking, the held-out check, `why`) is in `dream.json`. Versions written earlier, where `policy.json` holds both, are still read. A new version keeps the previous version's files instead of starting from an empty tree.
+- **`[develop]` is new** and off by default: with a `command`, dreaming also runs a policy-development agent. Its candidates are commits in the run `<run>.policy` (hidden from `git dream status`'s list of runs and never pooled by `history = "all"`), scored by replay, and a deployed candidate is the second parent of its policy commit. A run name ending in `.policy` is therefore reserved. `git dream clean --run X` also removes `X.policy`. With a non-`bandit` policy and `[develop]`, parameters are no longer sampled from the grids unless `[dream] method = "replay"`.
+- **A policy can be a program in the policy tree** (`"command"` in `policy.json`). It runs from a scratch worktree `<run>.policy@live`, checked out from its commit. Its `Dream-Policy` trailer reads `program@<commit>(...)`.
+- **`[storage]` is ignored.** `repack` and `gc_every` are gone; after each round git-dream runs `git maintenance run --auto`, and git packs by its own thresholds (`gc.auto`, `maintenance.*`). An old configuration with `[storage]` still loads and prints a note. Repositories now keep loose objects until git's threshold (6,700 by default) is reached; set `maintenance.loose-objects.enabled = true` and a low `maintenance.loose-objects.auto` to pack sooner.
+- **`git dream show` is `git log --graph`** over the round's refs: one line per attempt (commit, status, score, subject), newest first, with the round's `best` ref on the promoted attempt. The indented listing with `<- promoted` is gone.
+- **The yield model pools any run.** With `[dream] history = "all"`, runs recorded with another agent, evaluator or base commit no longer stop a `bandit` run: they are counted by the yield model (which only uses what each attempt did in its own tree) and still refused by replay. A new run with `history = "all"` dreams before its first round, so it starts from the other runs' yields.
+- `git dream replay --dir DIR` and `git dream -C DIR` are new.
+
+## Default policy, yield model and round extension
+
+`[policies] initial` now defaults to `{ family = "bandit" }` when a configuration does not set it. Configurations that name a family (the earlier templates wrote `refine_best`) behave as before, and so do runs that already deployed a policy.
+
+For a `bandit` policy, dreaming fits the yield model over recorded attempts instead of replaying candidates: `holdout`, `lam`, `candidates`, `mode` and `normalize` are not used, and the policy commit holds a `model` table instead of a replay ranking. `[dream] method = "replay"` restores replay-based selection for every family.
+
+`[explore] extend` defaults to `false`; newly generated templates set it to `true`. With it, `git dream run` adds `budget` proposals to the latest round's tree instead of starting a round, also when that round was killed before promotion, and `--new-round` starts a round. `--extend` does the same for one invocation. The round's policy is first driven through its recorded attempts, so an extended round equals one that ran uninterrupted with the larger budget. If the policy cannot reproduce the recorded attempts (an external policy that is not deterministic), extension fails and nothing is recorded. Root re-measurement happens only when a round starts; confirmation runs at the end of every step.
+
+## Scratch worktrees are outside `.git`
+
+Attempts are built and evaluated in scratch worktrees. These were in `.git/dream/wt/`. They are now in `$GIT_DREAM_WORKTREES/<repository>/` if that variable is set, otherwise in the user's cache directory: `$XDG_CACHE_HOME/git-dream/<repository>/`, `%LOCALAPPDATA%\git-dream\<repository>\` or `~/.cache/git-dream/<repository>/`. `<repository>` is the directory's name and a hash of its path.
+
+The reason: Claude Code refuses to write any file below a `.git` directory, so an agent started in `.git/dream/wt` could not edit the code. In the first run with a real agent every attempt ended unchanged. Commits, refs and notes are where they were.
+
+After upgrading, the old worktrees are unused: delete `.git/dream/wt` and run `git worktree prune`. Ignored build outputs in them are rebuilt once in the new place. `git dream clean` removes a run's worktrees there.
+
+## Trailers are read with git's parser
+
+A recorded outcome is the last paragraph of the attempt's commit message, read with `%(trailers)`. Earlier, any line of the message that began with `Dream-` was read as an outcome, so an agent's write-up that quoted such a line (they read them in the history) could change what was loaded and stop the round from being extended. No recorded history changes meaning unless a write-up contained such a line.
+
+## Attempts at once
+
+`[explore] parallel` (default 1) and `[explore] evaluations` (default `"alone"`) are new; a configuration without them behaves as before, one attempt at a time, and writes the same commits. `git dream run` and `git dream explore` accept `--parallel N`.
+
+With `parallel` above 1:
+
+- Each attempt in flight uses its own scratch worktree: `<run>` for lane 0, `<run>@<lane>` for the others, in the repository's worktree directory (see below). Agents and evaluators receive `$DREAM_LANE`.
+- An attempt is committed when it starts, with `Dream-Status: pending` and no score, and its ref is moved to the real commit when it finishes. A round killed mid-flight therefore keeps `pending` attempts; extending the round runs them again, and a new round ignores them. `pending` is a new status: tools that read the trailers, and external policies, will see it.
+- A result that arrived after later attempts had been chosen carries `Dream-Seen: <id>`, the first attempt chosen with that result known. Extension uses it to show the round's policy exactly what it saw at each recorded choice.
+- With `evaluations = "alone"` (the default) nothing else runs during an evaluation: attempts go in waves. For a parameter-space agent this leaves nothing to overlap, so `parallel` is ignored unless `evaluations = "parallel"`.
+- An extended round no longer equals an uninterrupted one in general: a step's budget ends a wave early, so later attempts are chosen with different information. With `parallel = 1` the equality holds as before.
+- `evaluate.reuse` does not stop two identical designs that are in flight together from both being measured.
+- Confirmation re-measurements run at once only with `evaluations = "parallel"`.
+
+While dreaming, replay candidates are scored on all cores. The ranking is identical to the single-threaded one.
+
+An external policy that exits without reading its request is now reported with what it printed (`policy stopped reading requests …; it replied "…"`) instead of, depending on timing, a broken-pipe error.
+
 ## Policy selection and replay
 
 `[dream] holdout` now defaults to `1`: the newest round of each run is reserved for a deployment check, with a separate measurement cache. The training winner must improve held-out J without increasing the miss rate. Insufficient history keeps the incumbent. Set `holdout = 0` explicitly to use the earlier unguarded selection rule.

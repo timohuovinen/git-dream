@@ -2,24 +2,29 @@
 //! when to stop. A policy never runs anything itself, so the same policy runs
 //! live (real evaluations) or dreamt (replayed over recorded history).
 //!
-//! A policy is `{"family": ..., "params": {...}}` (its *spec*), versioned in git
-//! for every round. Built-in families are implemented below; any program can be
-//! a policy family too ([`External`]), so new policies can be written in any
-//! language without rebuilding git-dream.
+//! A policy is its *spec*, the `policy.json` of a commit on the run's policy
+//! branch: `{"family": ..., "params": {...}}` for a family implemented below
+//! or registered from the configuration, or `{"command": ..., "params": {...}}`
+//! for a program kept in that commit's tree ([`External`] is the protocol of
+//! both kinds of program). So a policy can be written in any language, by a
+//! person or by the policy-development agent, without rebuilding git-dream.
 
 use crate::rng::Rng;
 use crate::tree::{repairable, Tree};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::rc::Rc;
 
 pub const INF: f64 = f64::INFINITY;
+
+/// The family name of a policy that is a program in its policy tree.
+pub const PROGRAM: &str = "program";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Param {
@@ -76,7 +81,8 @@ enum Kind {
     Beam,
     Softmax,
     Repair,
-    External(Rc<RefCell<External>>),
+    Bandit,
+    External(Arc<Mutex<External>>),
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +151,12 @@ impl Registry {
                 ]),
                 kind: Kind::Repair,
             },
+            Family {
+                name: crate::model::BANDIT.into(),
+                doc: "Learns which kind of move pays (continue the best attempt / another scored attempt / a failed one; for the first time or again) from measured outcomes: one Beta posterior per move type, started from the yield model that dreaming fits over history (s_*, n_*), updated during the round, sampled to pick the next attempt. Params: m (prior weight), gamma (credit to the moves leading to a new best), eps (minimum relative improvement), halflife (attempts until old evidence counts half), stop (end the round when every move type's expected yield is below this; 0 = never).".into(),
+                grid: vec![],
+                kind: Kind::Bandit,
+            },
         ];
         Registry { families }
     }
@@ -159,7 +171,7 @@ impl Registry {
             bail!("policy family {name:?} already exists");
         }
         anyhow::ensure!(timeout.is_finite() && timeout > 0.0 && timeout < 1e9, "external policy timeout must be finite, positive and below 1e9 seconds");
-        let ext = Rc::new(RefCell::new(External { command: command.into(), proc: None, timeout: Duration::from_secs_f64(timeout) }));
+        let ext = Arc::new(Mutex::new(External { command: command.into(), proc: None, timeout: Duration::from_secs_f64(timeout) }));
         self.families.push(Family { name: name.into(), doc: doc.into(), grid, kind: Kind::External(ext) });
         Ok(())
     }
@@ -173,8 +185,35 @@ impl Registry {
         self.families.iter().filter(|f| !f.grid.is_empty() && (only.is_empty() || only.contains(&f.name))).collect()
     }
 
+    /// A policy from its spec: `{"family": ..., "params": {...}}`.
     pub fn make(&self, spec: &Value) -> Result<Policy> {
-        let name = spec.get("family").and_then(Value::as_str).ok_or_else(|| anyhow!("policy spec without family: {spec}"))?;
+        self.make_in(spec, None)
+    }
+
+    /// A policy from the `policy.json` of a policy tree checked out in `dir`:
+    /// a family of this registry, or a program stored in that tree,
+    /// `{"command": "<how to start it>", "params": {...}, "timeout": seconds per decision}`.
+    /// The program is started in `dir` and speaks the protocol of [`External`].
+    pub fn make_in(&self, spec: &Value, dir: Option<&Path>) -> Result<Policy> {
+        if let Some(command) = spec.get("command") {
+            let command = command.as_str().filter(|c| !c.trim().is_empty()).ok_or_else(|| anyhow!("policy `command` must be a non-empty string"))?;
+            let family = spec.get("family").and_then(Value::as_str).unwrap_or(PROGRAM);
+            anyhow::ensure!(family == PROGRAM, "a policy is either a built-in `family` or a program started by `command`; this one names both ({family:?} and {command:?})");
+            let dir = dir.ok_or_else(|| anyhow!("a policy program is started from its policy tree, and there is none here: {spec}"))?;
+            let timeout = match spec.get("timeout") {
+                None | Some(Value::Null) => None,
+                Some(t) => Some(t.as_f64().filter(|t| t.is_finite() && *t > 0.0 && *t < 1e9).ok_or_else(|| anyhow!("policy `timeout` must be a positive number of seconds"))?),
+            };
+            let mut params = vec![];
+            if let Some(obj) = spec.get("params").and_then(Value::as_object) {
+                for (k, v) in obj {
+                    params.push((k.clone(), Param::from_json(v)?));
+                }
+            }
+            let ext = External { command: format!("cd {} && {command}", crate::agents::shell_quote(&dir.to_string_lossy())), proc: None, timeout: Duration::from_secs_f64(timeout.unwrap_or(10.0)) };
+            return Ok(Policy { family: PROGRAM.into(), params, kind: Kind::External(Arc::new(Mutex::new(ext))), rng: Rng::new(0), seed: 0, command: Some(command.into()), timeout, version: None });
+        }
+        let name = spec.get("family").and_then(Value::as_str).ok_or_else(|| anyhow!("a policy needs a `family` (or a `command`): {spec}"))?;
         let fam = self.get(name).ok_or_else(|| anyhow!("unknown policy family {name:?} (known: {})", self.families.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")))?;
         let mut params: Vec<(String, Param)> = vec![];
         if let Some(obj) = spec.get("params").and_then(Value::as_object) {
@@ -207,11 +246,16 @@ pub struct Policy {
     kind: Kind,
     rng: Rng,
     seed: u64,
+    /// A program from a policy tree: how its `policy.json` starts it, and its deadline per decision.
+    command: Option<String>,
+    timeout: Option<f64>,
+    /// Which version of the policy tree a program is (the policy commit), for display.
+    pub version: Option<String>,
 }
 
 impl Policy {
     fn new(fam: &Family, params: Vec<(String, Param)>) -> Policy {
-        Policy { family: fam.name.clone(), params, kind: fam.kind.clone(), rng: Rng::new(0), seed: 0 }
+        Policy { family: fam.name.clone(), params, kind: fam.kind.clone(), rng: Rng::new(0), seed: 0, command: None, timeout: None, version: None }
     }
 
     pub fn reset(&mut self, seed: u64) {
@@ -221,19 +265,45 @@ impl Policy {
 
     pub fn spec(&self) -> Value {
         let p: serde_json::Map<String, Value> = self.params.iter().map(|(k, v)| (k.clone(), v.to_json())).collect();
-        json!({"family": self.family, "params": p})
+        match &self.command {
+            None => json!({"family": self.family, "params": p}),
+            Some(c) => {
+                let mut spec = json!({"command": c, "params": p});
+                if let Some(t) = self.timeout {
+                    spec["timeout"] = json!(t);
+                }
+                spec
+            }
+        }
+    }
+
+    /// Whether this is a program from a policy tree (not a family of the registry).
+    pub fn is_program(&self) -> bool {
+        self.command.is_some()
     }
 
     pub fn repr(&self) -> String {
         let p: Vec<String> = self.params.iter().map(|(k, v)| format!("{k}={}", v.show())).collect();
-        format!("{}({})", self.family, p.join(","))
+        let version = self.version.as_ref().map_or(String::new(), |v| format!("@{v}"));
+        format!("{}{version}({})", self.family, p.join(","))
     }
 
     fn get(&self, k: &str) -> Option<&Param> {
         self.params.iter().find(|(n, _)| n == k).map(|(_, v)| v)
     }
 
-    fn p(&self, k: &str, default: f64) -> f64 {
+    pub fn set(&mut self, k: &str, v: Param) {
+        match self.params.iter_mut().find(|(n, _)| n == k) {
+            Some(e) => e.1 = v,
+            None => self.params.push((k.into(), v)),
+        }
+    }
+
+    pub fn unset(&mut self, k: &str) {
+        self.params.retain(|(n, _)| n != k);
+    }
+
+    pub fn p(&self, k: &str, default: f64) -> f64 {
         self.get(k).map_or(default, Param::f)
     }
 
@@ -255,7 +325,7 @@ impl Policy {
     /// Which node to continue next, or None to end the round.
     pub fn select(&mut self, t: &Tree) -> Result<Option<usize>> {
         let selected = match &self.kind {
-            Kind::External(ext) => ext.borrow_mut().select(&self.spec(), self.seed, t)?,
+            Kind::External(ext) => ext.lock().unwrap_or_else(|e| e.into_inner()).select(&self.spec(), self.seed, t)?,
             _ => self.choose(t),
         };
         if selected.is_none() && t.calls() < self.p("min_calls", 0.0) as usize {
@@ -306,6 +376,7 @@ impl Policy {
                 Some(c[self.rng.weighted(&w)].id)
             }
             Kind::Repair => self.select_repair(t),
+            Kind::Bandit => crate::model::select(self, self.seed, t),
             Kind::External(_) => unreachable!("external policy handled by select"),
         }
     }
@@ -374,6 +445,11 @@ impl Policy {
 /// and reads one line back: the node id to continue, or `null` to end the round
 /// (a bare value or `{"select": ...}`). It must be deterministic given its
 /// input, or replay cannot reproduce live rounds.
+///
+/// With `[explore] parallel`, attempts that are still running appear as nodes
+/// with `"status": "pending"` and no score: they count as calls, their parent's
+/// `n_exp` includes them, and they cannot be continued yet. After `null`,
+/// git-dream asks again when a running attempt finishes.
 #[derive(Debug)]
 struct Process {
     child: Child,
@@ -403,10 +479,15 @@ impl External {
         std::thread::spawn(move || {
             for req in incoming {
                 let reply = (|| -> Result<Option<usize>> {
-                    writeln!(stdin, "{req}")?;
-                    stdin.flush()?;
+                    // A policy that exits without reading its input (a typo, a crash at
+                    // startup) may be gone before the request is written. Say what it
+                    // printed instead of "broken pipe", whichever way the race went.
+                    let sent = writeln!(stdin, "{req}").and_then(|_| stdin.flush());
                     let mut line = String::new();
                     let size = (&mut stdout).take(1_048_577).read_line(&mut line)?;
+                    if let Err(e) = sent {
+                        anyhow::bail!("policy stopped reading requests ({e}); it replied {:?}", line.chars().take(200).collect::<String>());
+                    }
                     anyhow::ensure!(size > 0, "policy closed its output");
                     anyhow::ensure!(size <= 1_048_576, "policy reply exceeds 1 MiB");
                     let v: Value = serde_json::from_str(line.trim()).with_context(|| format!("policy replied {:?}", line.chars().take(200).collect::<String>()))?;

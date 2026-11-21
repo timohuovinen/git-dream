@@ -12,11 +12,11 @@
 use crate::rng::{hash, Rng};
 use anyhow::{bail, Result};
 use serde_json::{json, Map, Value};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,7 +65,7 @@ pub struct SpaceAgent {
     pub file: String,
     pub p_two: f64,
     pub p_far: f64,
-    cache: RefCell<HashMap<(String, usize), (String, String)>>,
+    cache: Mutex<HashMap<(String, usize), (String, String)>>,
 }
 
 impl SpaceAgent {
@@ -100,7 +100,7 @@ impl SpaceAgent {
                 bail!("start value {k} is not a knob");
             }
         }
-        Ok(SpaceAgent { names, values, start: st, salt: salt.into(), file: file.into(), p_two, p_far, cache: RefCell::new(HashMap::new()) })
+        Ok(SpaceAgent { names, values, start: st, salt: salt.into(), file: file.into(), p_two, p_far, cache: Mutex::new(HashMap::new()) })
     }
 
     pub fn key(&self, idx: &[usize]) -> String {
@@ -138,11 +138,11 @@ impl SpaceAgent {
     /// +-1 grid step (+-2 with probability p_far). Returns (child key, change).
     pub fn propose(&self, parent: &str, k: usize) -> (String, String) {
         let ck = (parent.to_string(), k);
-        if let Some(v) = self.cache.borrow().get(&ck) {
+        if let Some(v) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(&ck) {
             return v.clone();
         }
         let out = self.propose_uncached(parent, k);
-        self.cache.borrow_mut().insert(ck, out.clone());
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(ck, out.clone());
         out
     }
 
@@ -375,6 +375,11 @@ pub fn note_output(note: &Value) -> String {
         (true, false) => format!("stdout:\n{out}"),
         (false, false) => format!("stderr:\n{err}\n\nstdout:\n{out}"),
     }
+}
+
+/// `s` as one word of a `sh` command.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// The last non-empty stdout line: a number, or a JSON object with "score"

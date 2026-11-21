@@ -14,4 +14,4 @@ mkdir -p "$out"
 cargo build --release --locked -q --examples >&2
 cargo test --release --locked -q >&2 || { echo "tests failed" >&2; exit 2; }
 ./target/release/examples/compare --seeds "$seeds" --first-seed "$first" > "$out/compare.jsonl"
-python3 meta/score.py "$out/compare.jsonl"
+./target/release/examples/score "$out/compare.jsonl"
